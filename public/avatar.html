@@ -344,79 +344,32 @@ function buildScene(){
     else {
       log("🧊 GLB 로드 — morph targets: "+targetNames.length+"개");
       log("   あ OK: "+(targetNames.indexOf("あ")>=0));
-      // --- Cell-shading outline: screen-space DEPTH-EDGE OutlinePass (distance-independent) ---
-      // OutlineRenderer only draws silhouettes (no internal lips/nose). To get internal
-      // feature lines we detect depth discontinuities in a GeometryBuffer depth pass and
-      // draw them as a constant screen-px outline. Depth buffer is broadly supported
-      // (unlike the normal buffer which failed with normalTex=NO in this env).
-      const OUTLINE_PX = 1.2;            // edge thickness in screen pixels (constant)
-      const OUTLINE_COLOR = new BABYLON.Color3(0.04, 0.04, 0.07);
-      const _dbgDepth = new URLSearchParams(location.search).get("dbg")==="depth";
-      const gbr = sc.enableGeometryBufferRenderer();
-      log("   GeometryBuffer: "+(gbr?"OK":"FAIL")+", depthTex="+(gbr&&gbr.getDepthTexture?"yes(method)":(gbr&&gbr.depthTexture?"yes":"NO")));
-      if(gbr){
-        gbr.enableDepth = true;
-        gbr.enableNormal = false;
-        BABYLON.Effect.ShadersStore["outlinePPFragmentShader"] = `
-          precision highp float;
-          varying vec2 vUV;
-          uniform sampler2D textureSampler;
-          uniform sampler2D depthSampler;
-          uniform vec2 screenSize;
-          uniform float outlineWidth;
-          uniform vec3 outlineColor;
-          float getD(vec2 uv){ return texture2D(depthSampler, uv).r; }
-          float edgeAt(vec2 uv, vec2 texel){
-            float c = getD(uv);
-            vec2 offs[8];
-            offs[0]=vec2( texel.x,0.0); offs[1]=vec2(-texel.x,0.0);
-            offs[2]=vec2(0.0, texel.y); offs[3]=vec2(0.0,-texel.y);
-            offs[4]=vec2( texel.x, texel.y); offs[5]=vec2(-texel.x, texel.y);
-            offs[6]=vec2( texel.x,-texel.y); offs[7]=vec2(-texel.x,-texel.y);
-            float e=0.0;
-            for(int i=0;i<8;i++){
-              float d = getD(uv+offs[i]);
-              // depth discontinuity (with perspective correction factor)
-              if(abs(d-c) > 0.004 + c*0.0) e += 1.0;
-            }
-            return clamp(e/8.0, 0.0, 1.0);
-          }
-          void main(void){
-            vec3 col = texture2D(textureSampler, vUV).rgb;
-            #ifdef DBG_DEPTH
-              gl_FragColor = vec4(vec3(getD(vUV)), 1.0); return;
-            #endif
-            vec2 texel = vec2(outlineWidth) / screenSize;
-            float e = 0.0;
-            e += 0.25 * edgeAt(vUV, texel);
-            e += 0.125 * edgeAt(vUV + texel*vec2( 1.0, 0.0), texel);
-            e += 0.125 * edgeAt(vUV + texel*vec2(-1.0, 0.0), texel);
-            e += 0.125 * edgeAt(vUV + texel*vec2(0.0,  1.0), texel);
-            e += 0.125 * edgeAt(vUV + texel*vec2(0.0, -1.0), texel);
-            e += 0.0625 * edgeAt(vUV + texel*vec2( 1.0, 1.0), texel);
-            e += 0.0625 * edgeAt(vUV + texel*vec2(-1.0, 1.0), texel);
-            e += 0.0625 * edgeAt(vUV + texel*vec2( 1.0,-1.0), texel);
-            e += 0.0625 * edgeAt(vUV + texel*vec2(-1.0,-1.0), texel);
-            gl_FragColor = vec4(mix(col, outlineColor, clamp(e,0.0,1.0)), 1.0);
-          }`;
-        const pp = new BABYLON.PostProcess(
-          "outlinePP", "outlinePP",
-          ["screenSize","outlineWidth","outlineColor"],
-          ["depthSampler"],
-          1.0, cam, BABYLON.Texture.NEAREST_SAMPLINGMODE, eng);
-        if(_dbgDepth) pp.defines = "#define DBG_DEPTH";
-        pp.onApply = (effect)=>{
-          let dtex = gbr.getDepthTexture ? gbr.getDepthTexture() : (gbr.depthTexture||null);
-          effect.setTexture("depthSampler", dtex);
-          effect.setFloat2("screenSize", eng.getRenderWidth(), eng.getRenderHeight());
-          effect.setFloat("outlineWidth", OUTLINE_PX);
-          effect.setColor3("outlineColor", OUTLINE_COLOR);
-        };
-        BABYLON.FxaaPostProcess && new BABYLON.FxaaPostProcess("fxaa", 1.0, cam);
-        log("   외곽선 적용 (Depth-Edge OutlinePass "+OUTLINE_PX+"px AA + FXAA)");
-      } else {
-        log("   ⚠️ GeometryBuffer 미지원 → 외곽선 생략");
+      // --- Cell-shading outline ---
+      // Approach A (silhouette): Babylon OutlineRenderer — works, but only silhouettes.
+      // Approach B (internal lines): depth/normal GeometryBuffer — FAILED in this env
+      //   (normalTex=NO, and depth also empty on mobile Safari WebGL). Abandoned.
+      // We keep A and additionally outline the face mesh thick enough that lip/nose
+      // read as part of the silhouette where they meet the background.
+      const OUTLINE_PX = 0.0016;   // silhouette width (all meshes)
+      const orr = sc.getOutlineRenderer ? sc.getOutlineRenderer() : sc._outlineRenderer;
+      if(orr){ orr.renderableObjects = sc.meshes; log("   OutlineRenderer: OK"); }
+      else { log("   ⚠️ OutlineRenderer 없음"); }
+      for(let mi=0; mi<meshes.length; mi++){
+        const m=meshes[mi];
+        if(!m.getTotalVertices || m.getTotalVertices()===0) continue;
+        if(m.name==="foamboard"||m.name==="floor") continue;
+        m.renderOutline = true;
+        m.outlineColor = new BABYLON.Color3(0.04, 0.04, 0.07);
+        m.outlineWidth = OUTLINE_PX;
+        m.outlineRendererEnabled = true;
       }
+      // face mesh (目星_primitive0) — slightly thicker so lip/nose edges read
+      if(meshes[1]){
+        meshes[1].renderOutline = true;
+        meshes[1].outlineWidth = 0.003;
+        log("   face mesh(目星) 외곽선 강화 width=0.003");
+      }
+      log("   외곽선 적용 (OutlineRenderer, width="+OUTLINE_PX+", 거리무관)");
       // compute world bounding from ALL meshes
       let minY=Infinity,maxY=-Infinity,minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
       for(const m of sc.meshes){
