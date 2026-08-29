@@ -368,6 +368,14 @@ function buildScene(){
         m.outlineWidth = OUTLINE_PX;
         m.outlineRendererEnabled = true;
       }
+      // meshes[1] holds lip/nose geometry — force outline (slightly thicker so it reads)
+      if(meshes[1] && meshes[1].getTotalVertices && meshes[1].getTotalVertices()>0){
+        meshes[1].renderOutline = true;
+        meshes[1].outlineColor = new BABYLON.Color3(0.04, 0.04, 0.07);
+        meshes[1].outlineWidth = 0.002;
+        meshes[1].outlineRendererEnabled = true;
+        log("   meshes[1] (lip/nose) 강제 외곽선 적용");
+      }
       log("   외곽선 적용 (OutlineRenderer, width="+OUTLINE_PX+", 거리무관)");
       // compute world bounding from ALL meshes
       let minY=Infinity,maxY=-Infinity,minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
