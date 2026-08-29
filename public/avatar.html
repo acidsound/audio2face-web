@@ -250,24 +250,24 @@ function buildScene(){
   cam.upperRadiusLimit=20;
   cam.wheelDeltaPercentage=0.01;
   cam.pinchDeltaPercentage=0.01;
-  // Disable built-in panning entirely. We implement shift+drag pan manually so
-  // alpha/beta are NEVER touched during pan -> no NaN/Inf can ever occur.
   cam.panningSensibility=0;
   cam.useBouncingBehavior=false;
   cam.useAutoRotationBehavior=false;
   cam.useFramingBehavior=false;
 
-  // --- Manual shift+drag panning (root-cause fix: alpha/beta untouched) ---
-  const _ptr=cam.inputs.attached.pointers;
+  // --- Manual shift+drag panning (ROOT FIX) ---
+  // On shift: FULLY detach Babylon control so its internal math (which divides
+  // by angularSensibility) can never run and produce NaN. We move target by hand.
+  // alpha/beta are never touched -> they cannot NaN out.
   let _shiftDown=false, _panning=false, _lastX=0, _lastY=0;
   const _right=new BABYLON.Vector3(), _up=new BABYLON.Vector3();
-  window.addEventListener("keydown",(e)=>{ if(e.key==="Shift"){
+  window.addEventListener("keydown",(e)=>{ if(e.key==="Shift" && !_shiftDown){
     _shiftDown=true;
-    _ptr.angularSensibilityX=0; _ptr.angularSensibilityY=0; // freeze rotation while panning
+    cam.detachControl();   // <-- kills Babylon pointer math entirely
   } });
   window.addEventListener("keyup",(e)=>{ if(e.key==="Shift"){
     _shiftDown=false; _panning=false;
-    _ptr.angularSensibilityX=1000; _ptr.angularSensibilityY=1000;
+    cam.attachControl(canvas, true);  // restore normal rotation/zoom
   } });
   canvas.addEventListener("pointerdown",(e)=>{
     if(_shiftDown){ _panning=true; _lastX=e.clientX; _lastY=e.clientY; }
@@ -276,14 +276,15 @@ function buildScene(){
     if(_shiftDown && _panning){
       const dx=e.clientX-_lastX, dy=e.clientY-_lastY;
       _lastX=e.clientX; _lastY=e.clientY;
-      // camera basis vectors — independent of alpha/beta (which we never change)
-      cam.getDirectionToRef(BABYLON.Axis.X, _right);
-      cam.getDirectionToRef(BABYLON.Axis.Y, _up);
-      const panScale = cam.radius * 0.0015;  // distance-proportional speed
+      // camera basis from current alpha/beta (pure trig, finite if alpha/beta finite)
+      cam.getDirectionToRef(BABYLON.Axis.X, _right);  // right
+      cam.getDirectionToRef(BABYLON.Axis.Y, _up);     // up
+      const panScale = cam.radius * 0.0015;
       const t=cam.target;
-      t.x += (-dx*panScale)*_right.x + (dy*panScale)*_up.x;
-      t.y += (-dx*panScale)*_right.y + (dy*panScale)*_up.y;
-      t.z += (-dx*panScale)*_right.z + (dy*panScale)*_up.z;
+      const nx = t.x + (-dx*panScale)*_right.x + (dy*panScale)*_up.x;
+      const ny = t.y + (-dx*panScale)*_right.y + (dy*panScale)*_up.y;
+      const nz = t.z + (-dx*panScale)*_right.z + (dy*panScale)*_up.z;
+      cam.setTarget(new BABYLON.Vector3(nx, ny, nz));  // setTarget keeps alpha/beta intact
     }
   });
   window.addEventListener("pointerup",()=>{ _panning=false; });
@@ -295,7 +296,7 @@ function buildScene(){
   canvas.parentElement.appendChild(hud);
   sc.onBeforeRenderObservable.add(()=>{
     const t=cam.target;
-    hud.textContent=`α=${(cam.alpha).toFixed(2)}  β=${(cam.beta).toFixed(2)}\nr=${cam.radius.toFixed(2)}  fov=${cam.fov.toFixed(2)}\ntarget=(${t.x.toFixed(2)}, ${t.y.toFixed(2)}, ${t.z.toFixed(2)})\nfaceW=${typeof faceW!=="undefined"?faceW.toFixed(2):"-"}\npan=${_shiftDown?"SHIFT+drag":"off"}`;
+    hud.textContent=`α=${(cam.alpha).toFixed(2)}  β=${(cam.beta).toFixed(2)}\nr=${cam.radius.toFixed(2)}  fov=${cam.fov.toFixed(2)}\ntarget=(${t.x.toFixed(2)}, ${t.y.toFixed(2)}, ${t.z.toFixed(2)})\nfaceW=${typeof faceW!=="undefined"?faceW.toFixed(2):"-"}\npan=${_shiftDown?"SHIFT+drag (detached)":"off"}`;
   });
   cam.fov=0.6; // standard portrait lens
   cam.minZ=0.01; // allow very near plane
