@@ -55,7 +55,7 @@ const SR=16000, WIN=0.05, HOP=0.05, TS_OUT=50, FRAME=51, LOOKAHEAD=2.0;
 const DB_NAME="a2f-models", DB_VER=1, STORE="blobs";
 const MODEL_URL="./models/unitalker_v0.4.0_base.int8.onnx";
 const GLB_URL="./models/KQ-default_420.glb";
-const FILES=["test_voice.wav","tts_hello.wav","tts_korean.wav","keqing_about_02.wav"];
+const FILES=["keqing_more_about_02.wav","keqing_more_about_03.wav","keqing_ascension_01.wav"];
 const $ = id=>document.getElementById(id);
 const log = m=>{ const el=$("log"); el.textContent+=m+"\n"; el.scrollTop=el.scrollHeight; };
 ort.env.wasm.wasmPaths="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/";
@@ -180,7 +180,11 @@ async function play(){
   stopFlag=false; playing=true;
   $("hop").textContent=Math.round(HOP*1000);
   try{
-    const url=FILES[Math.floor(Math.random()*FILES.length)];
+  // cycle through files in order
+  if(typeof play._fileIdx==="undefined") play._fileIdx=0;
+  const url=FILES[play._fileIdx % FILES.length];
+  play._fileIdx++;
+  log("🎵 ["+play._fileIdx+"/"+FILES.length+"] "+url);
     const {idx,dec}=await loadAudio(url);
     const ac=getAudioCtx();
     const duration=dec.duration;
@@ -312,7 +316,7 @@ function buildScene(){
       // face width is ~25% of shoulder width for typical anime
       const faceW = Math.max(0.08, shoulderW*0.25);
       // close-up: distance = faceW * 1.5 (inside-head), but clamp prevents
-      const faceRadius = faceW * 4.0;   // shoulder→chest visible, chin at center
+      const faceRadius = faceW * 5.5;   // far enough so head fits top 49% of screen
       const safeMin = faceW * 0.8;       // close enough but outside skin
       cam.setTarget(new BABYLON.Vector3(cx, headY, cz));
       cam.radius = faceRadius;
