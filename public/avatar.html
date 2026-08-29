@@ -233,8 +233,8 @@ function buildScene(){
   const canvas=$("render");
   const eng=new BABYLON.Engine(canvas,true,{preserveDrawingBuffer:true,stencil:true});
   const sc=new BABYLON.Scene(eng); sc.clearColor=new BABYLON.Color4(0.07,0.08,0.1,1);
-  // camera: KQ GLB is built with face toward -Z; alpha=π/2 looks at face
-  const cam=new BABYLON.ArcRotateCamera("cam", Math.PI/2, Math.PI/2.3, 3.5, BABYLON.Vector3.Zero(), sc);
+  // camera: KQ GLB face toward -Z; alpha=π/2. beta π/2.6 looks slightly down at face.
+  const cam=new BABYLON.ArcRotateCamera("cam", Math.PI/2, Math.PI/2.6, 3.5, BABYLON.Vector3.Zero(), sc);
   cam.attachControl(canvas,true);
   // HARD CLAMP: never enter mesh
   cam.lowerRadiusLimit=0.15;   // allow extreme close-up
@@ -275,8 +275,8 @@ function buildScene(){
         minZ=Math.min(minZ,lo.z); maxZ=Math.max(maxZ,hi.z);
       }
       const cx=(minX+maxX)/2, cz=(minZ+maxZ)/2;
-      // head is at ~85% of body height for VRM/MetaHuman models
-      const headY=minY+(maxY-minY)*0.85;
+      // aim at face center: ~92% of body height (face center, not top of head)
+      const headY=minY+(maxY-minY)*0.92;
       // shoulderWidth as face width proxy
       const totalH = maxY-minY;
       const shoulderW = (maxX-minX);
