@@ -234,15 +234,16 @@ function buildScene(){
   const eng=new BABYLON.Engine(canvas,true,{preserveDrawingBuffer:true,stencil:true});
   const sc=new BABYLON.Scene(eng); sc.clearColor=new BABYLON.Color4(0.07,0.08,0.1,1);
   // camera: start far enough to see full body
-  const cam=new BABYLON.ArcRotateCamera("cam", -Math.PI/2, Math.PI/2.2, 3.5, BABYLON.Vector3.Zero(), sc);
+  const cam=new BABYLON.ArcRotateCamera("cam", -Math.PI/2, Math.PI/2.3, 3.5, BABYLON.Vector3.Zero(), sc);
   cam.attachControl(canvas,true);
   // HARD CLAMP: never enter mesh
-  cam.lowerRadiusLimit=0.6;
+  cam.lowerRadiusLimit=0.15;   // allow extreme close-up
   cam.upperRadiusLimit=20;
   cam.wheelDeltaPercentage=0.01;
   cam.pinchDeltaPercentage=0.01;
   cam.panningSensibility=0; // disable panning
-  cam.fov=0.6; // narrower FOV → less distortion, more face
+  cam.fov=0.45; // narrower FOV → face close-up with less distortion
+  cam.minZ=0.01; // allow very near plane
   new BABYLON.HemisphericLight("l",new BABYLON.Vector3(0,1,0),sc);
   scene=sc; renderLoop=eng;
   BABYLON.SceneLoader.ImportMesh("", "", GLB_URL, sc, (meshes)=>{
@@ -276,17 +277,19 @@ function buildScene(){
       const cx=(minX+maxX)/2, cz=(minZ+maxZ)/2;
       // head is at ~85% of body height for VRM/MetaHuman models
       const headY=minY+(maxY-minY)*0.85;
-      // shoulderWidth (~30% of total height for typical anime) as face width proxy
+      // shoulderWidth as face width proxy
       const totalH = maxY-minY;
       const shoulderW = (maxX-minX);
-      const faceW = Math.max(0.12, shoulderW*0.30); // ~12% of total height as face width
-      const faceRadius = faceW * 3.0;   // close-up, well outside head
-      const safeMin = faceW * 1.8;       // never inside head
+      // face width is ~25% of shoulder width for typical anime
+      const faceW = Math.max(0.08, shoulderW*0.25);
+      // close-up: distance = faceW * 1.5 (inside-head), but clamp prevents
+      const faceRadius = faceW * 2.0;   // face fills screen
+      const safeMin = faceW * 0.6;       // can get very close (just outside skin)
       cam.setTarget(new BABYLON.Vector3(cx, headY, cz));
       cam.radius = faceRadius;
       cam.lowerRadiusLimit = safeMin;
       cam.upperRadiusLimit = Math.max(8, totalH * 1.5);
-      log("   카메라: faceW="+faceW.toFixed(2)+" radius="+cam.radius.toFixed(2)+" min="+safeMin.toFixed(2));
+      log("   카메라: faceW="+faceW.toFixed(2)+" radius="+cam.radius.toFixed(2)+" min="+safeMin.toFixed(2)+" fov="+cam.fov.toFixed(2));
       // camera direction: from -Z to +Z, alpha=-π/2 looks at +Z. Keep default.
       // HARD clamp every frame
       const _minR = safeMin;
