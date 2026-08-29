@@ -62,7 +62,7 @@ ort.env.wasm.wasmPaths="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist
 ort.env.wasm.numThreads=Math.min(4, navigator.hardwareConcurrency||4);
 
 let session=null, audioCtx=null, curSrc=null, stopFlag=false, playing=false, modelBufCache=null;
-let scene=null, renderLoop=null, faceMesh=null, targetMgr=null, targetNames=[];
+let scene=null, faceMesh=null, targetMgr=null, targetNames=[];
 
 // UniTalker ARKit 51 → KQ VRM 61 target.
 // eyeBlink (ARKit 0,1) is NOT mapped — UniTalker correlates blink with jawOpen, which reads
@@ -234,7 +234,7 @@ function stopPlay(){
   stopFlag=true; playing=false;
   try{ if(curSrc){ curSrc.onended=null; curSrc.stop(); } }catch(e){}
   curSrc=null;
-  if(renderLoop){ renderLoop.stop(); renderLoop=null; }
+  if(eng) eng.stopRenderLoop();
   resetMouth();
   log("⏹ 정지");
 }
@@ -392,7 +392,7 @@ function buildScene(){
   hemi.intensity=0.4;
   hemi.diffuse=new BABYLON.Color3(0.95,0.95,1.0);
   hemi.groundColor=new BABYLON.Color3(0.7,0.7,0.72);
-  scene=sc; renderLoop=eng;
+  scene=sc;
   BABYLON.SceneLoader.ImportMesh("", "", GLB_URL, sc, (meshes)=>{
     // pick the face mesh (max morph targets)
     let best=null, bestN=0;
