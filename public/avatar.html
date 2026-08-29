@@ -26,6 +26,7 @@
   button:disabled { opacity:.4; }
   #log { max-width:480px; margin:14px auto 0; font-size:11px; opacity:.65; white-space:pre-wrap; line-height:1.5; max-height:200px; overflow:auto; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/babylonjs@7.54.0/babylon.max.js"></script>
 </head>
 <body>
 <header>
@@ -45,10 +46,9 @@
 </main>
 
 <script type="module">
-import * as BABYLON from "https://cdn.jsdelivr.net/npm/babylonjs@7.54.0/babylon.max.mjs";
 import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/ort.webgpu.min.mjs";
 
-const SR=16000, WIN=0.20, HOP=0.05, TS_OUT=50, FRAME=51;
+const SR=16000, WIN=0.05, HOP=0.05, TS_OUT=50, FRAME=51;
 const DB_NAME="a2f-models", DB_VER=1, STORE="blobs";
 const CANDIDATES=[
   { ep:"wasm", model:"./models/unitalker_v0.4.0_base.int8.onnx", label:"WASM·INT8" },
