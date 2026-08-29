@@ -348,7 +348,7 @@ function buildScene(){
       // mesh.renderOutline draws a screen-pixel-width silhouette around each mesh
       // via the built-in OutlineRenderer (NOT the separate OutlineLayer class which
       // is not in babylon core). Width is in screen units so it stays constant at any zoom.
-      const OUTLINE_PX = 0.004;   // very thin silhouette, no eye/mesh intrusion
+      const OUTLINE_PX = 0.002;   // half of previous — very thin silhouette
       const outlineMat = new BABYLON.StandardMaterial("outlineProxyMat", sc);
       // ensure OutlineRenderer exists
       const orr = sc.getOutlineRenderer ? sc.getOutlineRenderer() : sc._outlineRenderer;
