@@ -46,7 +46,7 @@
   </svg>
   <div class="hud">
     <div class="card"><div class="k">추론</div><div class="v"><span id="lat">–</span><small> ms</small></div><div class="bar"><i id="latbar"></i></div></div>
-    <div class="card"><div class="k">홉</div><div class="v"><span id="hop">50</span><small> ms</small></div></div>
+    <div class="card"><div class="k">홉</div><div class="v"><span id="hop">–</span><small> ms</small></div></div>
     <div class="card"><div class="k">버퍼</div><div class="v" id="buf">0<small> 청크</small></div></div>
   </div>
   <div class="hud">
@@ -67,7 +67,7 @@
 </main>
 
 <script type="module">
-const SR = 16000, WIN = 0.20, HOP = 0.10, TS_OUT = 50, FRAME = 51;
+const SR = 16000, WIN = 0.05, HOP = 0.05, TS_OUT = 50, FRAME = 51;
 const DB_NAME = "a2f-models", DB_VER = 1, STORE = "blobs";
 const CANDIDATES = [
   { ep:"wasm",   model:"./models/unitalker_v0.4.0_base.int8.onnx", label:"WASM·INT8" },
@@ -151,6 +151,7 @@ async function loadAudio(url){
 }
 async function playAndSync(){
   if(!session){ log("모델 준비 안 됨"); return; }
+  $("hop").textContent=Math.round(HOP*1000);
   stopFlag=false;
   const url=$("tts").value;
   const {idx, ac, dec}=await loadAudio(url);
