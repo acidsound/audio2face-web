@@ -345,10 +345,11 @@ function buildScene(){
       log("🧊 GLB 로드 — morph targets: "+targetNames.length+"개");
       log("   あ OK: "+(targetNames.indexOf("あ")>=0));
       // --- Cell-shading outline: screen-space OutlinePass (distance-independent) ---
-      // Build a world-normal geometry buffer, then a PostProcess does Sobel edge
+      // Build a world-normal geometry buffer, then a PostProcess does edge
       // detection on normals. Normal-based edges are invariant to camera distance,
       // so the outline width stays constant in SCREEN PIXELS at any zoom.
-      const OUTLINE_PX = 1.5;            // outline thickness in screen pixels (constant)
+      // Anti-aliased: multi-tap Sobel + soft falloff. A FXAA pass is chained after.
+      const OUTLINE_PX = 3.0;            // outline thickness in screen pixels (constant)
       const OUTLINE_COLOR = new BABYLON.Color3(0.04, 0.04, 0.07);
       const gbr = sc.enableGeometryBufferRenderer();
       if(gbr){
@@ -364,24 +365,37 @@ function buildScene(){
           uniform vec3 outlineColor;
           vec3 getN(vec2 uv){ return texture2D(normalSampler, uv).xyz * 2.0 - 1.0; }
           bool fg(vec3 n){ return length(n) > 0.1; }
-          void main(void){
-            vec2 texel = vec2(outlineWidth) / screenSize;
-            vec3 col = texture2D(textureSampler, vUV).rgb;
-            vec3 nC = getN(vUV);
-            float edge = 0.0;
+          float edgeAt(vec2 uv, vec2 texel){
+            vec3 nC = getN(uv);
             vec2 offs[8];
             offs[0]=vec2( texel.x,0.0); offs[1]=vec2(-texel.x,0.0);
             offs[2]=vec2(0.0, texel.y); offs[3]=vec2(0.0,-texel.y);
             offs[4]=vec2( texel.x, texel.y); offs[5]=vec2(-texel.x, texel.y);
             offs[6]=vec2( texel.x,-texel.y); offs[7]=vec2(-texel.x,-texel.y);
+            float e=0.0;
             for(int i=0;i<8;i++){
-              vec3 n = getN(vUV+offs[i]);
-              if(fg(nC) && !fg(n)) edge += 1.0;        // foreground -> background (silhouette)
-              else if(!fg(nC) && fg(n)) edge += 1.0;   // background -> foreground
-              else if(fg(nC) && fg(n) && distance(n,nC) > 0.6) edge += 1.0; // internal crease
+              vec3 n = getN(uv+offs[i]);
+              if(fg(nC) && !fg(n)) e+=1.0;
+              else if(!fg(nC) && fg(n)) e+=1.0;
+              else if(fg(nC) && fg(n) && distance(n,nC) > 0.6) e+=1.0;
             }
-            edge = clamp(edge, 0.0, 1.0);
-            gl_FragColor = vec4(mix(col, outlineColor, edge), 1.0);
+            return clamp(e/8.0, 0.0, 1.0);
+          }
+          void main(void){
+            vec2 texel = vec2(outlineWidth) / screenSize;
+            vec3 col = texture2D(textureSampler, vUV).rgb;
+            // 3x3 sub-sample for smooth (AA) edge
+            float e = 0.0;
+            e += 0.25 * edgeAt(vUV, texel);
+            e += 0.125 * edgeAt(vUV + texel*vec2( 1.0, 0.0), texel);
+            e += 0.125 * edgeAt(vUV + texel*vec2(-1.0, 0.0), texel);
+            e += 0.125 * edgeAt(vUV + texel*vec2(0.0,  1.0), texel);
+            e += 0.125 * edgeAt(vUV + texel*vec2(0.0, -1.0), texel);
+            e += 0.0625 * edgeAt(vUV + texel*vec2( 1.0, 1.0), texel);
+            e += 0.0625 * edgeAt(vUV + texel*vec2(-1.0, 1.0), texel);
+            e += 0.0625 * edgeAt(vUV + texel*vec2( 1.0,-1.0), texel);
+            e += 0.0625 * edgeAt(vUV + texel*vec2(-1.0,-1.0), texel);
+            gl_FragColor = vec4(mix(col, outlineColor, clamp(e,0.0,1.0)), 1.0);
           }`;
         const pp = new BABYLON.PostProcess(
           "outlinePP", "outlinePP",
@@ -394,7 +408,9 @@ function buildScene(){
           effect.setFloat("outlineWidth", OUTLINE_PX);
           effect.setColor3("outlineColor", OUTLINE_COLOR);
         };
-        log("   외곽선 적용 (OutlinePass 후처리, "+OUTLINE_PX+"px 고정)");
+        // FXAA after outline for overall antialiasing
+        BABYLON.FxaaPostProcess && new BABYLON.FxaaPostProcess("fxaa", 1.0, cam);
+        log("   외곽선 적용 (OutlinePass "+OUTLINE_PX+"px AA + FXAA)");
       } else {
         log("   ⚠️ GeometryBuffer 미지원 → 외곽선 생략");
       }
