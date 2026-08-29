@@ -90,33 +90,35 @@ const MOUTH_MIN = 0.10;
 const MOUTH_MAX = 0.80;
 let _rawJawLog = -1;
 const DBG_BS = new URLSearchParams(location.search).get("dbg")==="bs";
-// independent idle blink (decoupled from mouth): drives まばたき target directly
+// independent idle blink (decoupled from mouth): driven inside the render loop, not rAF chains
 let BLINK_IDX = -1;          // targetNames index of まばたき
-let blinkVal = 0;            // current blink amount 0..1
-let blinkTimer = null;
-function scheduleBlink(){
-  const wait = 2200 + Math.random()*3200;   // 2.2~5.4s between blinks
-  blinkTimer = setTimeout(async ()=>{
-    // double-blink chance
-    await doBlink();
-    if(Math.random()<0.25) await doBlink();
-    scheduleBlink();
-  }, wait);
-}
-function doBlink(){
-  return new Promise(res=>{
-    const closeMs=120, openMs=150;
-    const t0=performance.now();
-    const step=()=>{
-      const e=performance.now()-t0;
-      if(e<closeMs){ blinkVal = e/closeMs; }
-      else if(e<closeMs+openMs){ blinkVal = 1-(e-closeMs)/openMs; }
-      else { blinkVal = 0; res(); return; }
-      if(BLINK_IDX>=0 && targetMgr){ targetMgr.getTarget(BLINK_IDX).influence = blinkVal; }
-      requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  });
+let blinkPhase = "idle";     // idle | closing | opening
+let blinkT = 0;              // ms elapsed in current phase
+let blinkNext = 2200 + Math.random()*3200;  // ms until next blink starts
+let blinkLast = -1;
+const BLINK_CLOSE_MS = 120, BLINK_OPEN_MS = 150;
+function updateBlink(now){
+  if(BLINK_IDX<0 || !targetMgr) return;
+  if(blinkLast<0) blinkLast = now;
+  const dt = now - blinkLast; blinkLast = now;
+  if(blinkPhase==="idle"){
+    blinkNext -= dt;
+    if(blinkNext<=0){ blinkPhase="closing"; blinkT=0; }
+  } else if(blinkPhase==="closing"){
+    blinkT += dt;
+    blinkVal = Math.min(1, blinkT/BLINK_CLOSE_MS);
+    if(blinkT>=BLINK_CLOSE_MS){ blinkPhase="opening"; blinkT=0; }
+  } else if(blinkPhase==="opening"){
+    blinkT += dt;
+    blinkVal = Math.max(0, 1 - blinkT/BLINK_OPEN_MS);
+    if(blinkT>=BLINK_OPEN_MS){
+      blinkVal = 0; blinkPhase="idle";
+      // 25% double-blink, else reset timer
+      if(Math.random()<0.25){ blinkPhase="closing"; blinkT=0; }
+      else { blinkNext = 2200 + Math.random()*3200; }
+    }
+  }
+  targetMgr.getTarget(BLINK_IDX).influence = blinkVal;
 }
 
 function getAudioCtx(){
@@ -401,10 +403,10 @@ function buildScene(){
     else {
       log("🧊 GLB 로드 — morph targets: "+targetNames.length+"개");
       log("   あ OK: "+(targetNames.indexOf("あ")>=0));
-      // independent idle blink: find まばたき target, start decoupled timer
+      // independent idle blink: find まばたき target, driven inside render loop
       BLINK_IDX = targetNames.indexOf("まばたき");
-      if(BLINK_IDX>=0 && !blinkTimer){ scheduleBlink(); log("   idle blink: まばたき(idx="+BLINK_IDX+") 타이머 시작"); }
-      else if(BLINK_IDX<0){ log("   ⚠️ まばたき 타깃 없음"); }
+      if(BLINK_IDX>=0){ blinkLast=-1; blinkPhase="idle"; log("   idle blink: まばたき(idx="+BLINK_IDX+") 렌더루프 연동"); }
+      else { log("   ⚠️ まばたき 타깃 없음"); }
       // --- Cell-shading outline: Babylon OutlineRenderer (core, distance-independent) ---
       // GeometryBuffer/PrePass depth&normal textures are unavailable in this env (both return
       // depthTex=NO), so screen-space edge detection is impossible. OutlineRenderer draws a
@@ -497,7 +499,7 @@ function buildScene(){
       sc.animationGroups.forEach(g=>g.stop());
       log("   idle (애니매이션 정지) + 폼보드 배경");
     }
-    eng.runRenderLoop(()=>sc.render());
+    eng.runRenderLoop(()=>{ updateBlink(performance.now()); sc.render(); });
   }, null, (sc2,msg)=>{ log("✗ GLB: "+msg); });
   window.addEventListener("resize",()=>eng.resize());
 }
