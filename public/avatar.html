@@ -67,32 +67,32 @@ function buildScene(){
   engine=new BABYLON.Engine(canvas, true, {preserveDrawingBuffer:true, stencil:true});
   scene=new BABYLON.Scene(engine);
   scene.clearColor=new BABYLON.Color4(0.07,0.08,0.10,1);
-  const cam=new BABYLON.ArcRotateCamera("cam", -Math.PI/2, Math.PI/2.1, 4.2, BABYLON.Vector3.Zero(), scene);
+  const cam=new BABYLON.ArcRotateCamera("cam", -Math.PI/2, Math.PI/2, 4.2, BABYLON.Vector3.Zero(), scene);
   cam.attachControl(canvas,true); cam.lowerRadiusLimit=2.5; cam.upperRadiusLimit=8;
   new BABYLON.HemisphericLight("l", new BABYLON.Vector3(0,1,0), scene);
   // head
   const head=BABYLON.MeshBuilder.CreateSphere("head",{diameter:2,segments:32},scene);
   const hm=new BABYLON.StandardMaterial("hm",scene); hm.diffuseColor=new BABYLON.Color3(0.55,0.6,0.78); hm.specularColor=new BABYLON.Color3(0.1,0.1,0.1);
   head.material=hm;
-  // eyes
+  // eyes (in front of face)
   for(const sx of [-0.35,0.35]){
     const e=BABYLON.MeshBuilder.CreateSphere("eye"+sx,{diameter:0.28,segments:16},scene);
-    e.position.set(sx,0.25,0.92);
+    e.position.set(sx,0.25,1.0);
     const em=new BABYLON.StandardMaterial("em",scene); em.diffuseColor=new BABYLON.Color3(0.95,0.97,1); em.emissiveColor=new BABYLON.Color3(0.2,0.25,0.3);
     e.material=em;
   }
-  // mouth: outer lip (flat ellipse) + inner (dark, scales open)
+  // mouth: outer lip (flat ellipse) + inner (dark, scales open) — pushed in FRONT of head surface
   const lip=BABYLON.MeshBuilder.CreateTorus("lip",{diameter:0.55, thickness:0.06, tessellation:32},scene);
-  lip.position.set(0,-0.35,0.95); lip.rotation.x=Math.PI/2;
+  lip.position.set(0,-0.35,1.02); lip.rotation.x=Math.PI/2;
   const lm=new BABYLON.StandardMaterial("lm",scene); lm.diffuseColor=new BABYLON.Color3(0.8,0.45,0.5);
   lip.material=lm;
   mouthInner=BABYLON.MeshBuilder.CreatePlane("mouthIn",{size:0.4},scene);
-  mouthInner.position.set(0,-0.35,0.952);
-  const im=new BABYLON.StandardMaterial("im",scene); im.diffuseColor=new BABYLON.Color3(0.25,0.05,0.1); im.backFaceCulling=false;
+  mouthInner.position.set(0,-0.35,1.025);
+  const im=new BABYLON.StandardMaterial("im",scene); im.diffuseColor=new BABYLON.Color3(0.25,0.05,0.1); im.backFaceCulling=false; im.emissiveColor=new BABYLON.Color3(0.1,0.02,0.04);
   mouthInner.material=im;
   mouthInner.scaling.y=0.05; // closed by default
   engine.runRenderLoop(()=>scene.render());
-  log("🧊 Babylon 씬 준비 (헤드+입 메시)");
+  log("🧊 Babylon 씬 준비 — 메시: "+scene.meshes.length+"개 (헤드+눈2+입술+입안)");
 }
 
 // ---- model cache ----
