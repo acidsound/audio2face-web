@@ -198,6 +198,8 @@ async function play(){
         const dt=performance.now()-ti; record(dt);
         frames[prodI]=out[Object.keys(out)[0]].data.slice(-FRAME);
         if(prodI%Math.ceil(total/10)===0) log(`… ${Math.floor(prodI/total*100)}%`);
+        // yield to render so HUD/log stay responsive (cheap, no 16ms rAF tax)
+        if(prodI%2===0) await new Promise(r=>setTimeout(r,0));
       }
     };
     const prodP=produce();
@@ -269,14 +271,19 @@ function buildScene(){
       const cy=minY+(maxY-minY)*0.85; // aim at face (upper)
       cam.setTarget(new BABYLON.Vector3(cx,cy,cz));
       const h=maxY-minY;
-      const headW = Math.max(maxX-minX, maxZ-minZ); // approximate head width
+      // use face mesh's own bounding box (head, not full body) for true close-up
+      const faceBB=faceMesh.getBoundingInfo().boundingBox;
+      const fw=faceBB.maximumWorld.x - faceBB.minimumWorld.x;
+      const fh=faceBB.maximumWorld.y - faceBB.minimumWorld.y;
+      const faceW=Math.max(fw, fh); // whichever larger
+      const headW = Math.max(faceW, 0.3); // never smaller than 0.3
       // safe distance: never enter mesh; close-up but not clip-through
-      const faceRadius = headW * 1.5;
-      const safeMin = headW * 1.05; // never closer than mesh edge
+      const faceRadius = headW * 2.0;  // close enough for face
+      const safeMin = headW * 1.2;     // never closer than head edge
       cam.radius = faceRadius;
       cam.lowerRadiusLimit = safeMin;
       cam.upperRadiusLimit = Math.max(8, h * 1.5);
-      log("   카메라: headW="+headW.toFixed(2)+" radius="+cam.radius.toFixed(2)+" min="+safeMin.toFixed(2));
+      log("   카메라: faceW="+headW.toFixed(2)+" radius="+cam.radius.toFixed(2)+" min="+safeMin.toFixed(2));
       // HARD CLAMP: every frame, force radius >= safeMin (pinch/wheel cannot pass through mesh)
       const _minR = safeMin;
       sc.onBeforeRenderObservable.add(()=>{
@@ -291,6 +298,24 @@ function buildScene(){
       // idle: stop all default animations (no greeting/spin)
       sc.animationGroups.forEach(g=>g.stop());
       log("   idle 모드 (기본 애니매이션 정지)");
+      // SUBTLE IDLE: gentle breathing scale on root + small head sway
+      // find root mesh (parent-less, contains skin)
+      const rootMesh = sc.meshes.find(m=>!m.parent && m.getBoundingInfo().boundingBox.maximumWorld.y > h*0.5) || sc.meshes[0];
+      // slight forward lean to mitigate A-pose look (-3° around X)
+      rootMesh.rotation.x = -0.05;
+      const _t0 = performance.now();
+      const _idleObs = sc.onBeforeRenderObservable.add(()=>{
+        if(stopFlag) return;
+        const t = (performance.now() - _t0) / 1000;
+        // breathing 0.4Hz, ±0.3% scale
+        const breath = 1.0 + Math.sin(t * 2.5) * 0.003;
+        rootMesh.scaling.set(breath, breath, breath);
+        // tiny head sway 0.15Hz, ±1° on Z
+        const headSway = Math.sin(t * 0.94) * 0.018;
+        rootMesh.rotation.z = headSway;
+      });
+      // save for cleanup
+      window._idleObs = _idleObs;
     }
     eng.runRenderLoop(()=>sc.render());
   }, null, (sc2,msg)=>{ log("✗ GLB: "+msg); });
