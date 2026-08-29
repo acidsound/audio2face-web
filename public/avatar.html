@@ -225,7 +225,7 @@ function buildScene(){
     for(const m of meshes){
       if(m.morphTargetManager && m.morphTargetManager.numTargets>0){
         faceMesh=m; targetMgr=m.morphTargetManager;
-        targetNames=targetMgr.getTargets().map(t=>t.name);
+        targetNames=targetMgr.targets.map(t=>t.name||"");
         break;
       }
     }
