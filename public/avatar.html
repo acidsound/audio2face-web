@@ -41,6 +41,11 @@
     <div class="card"><div class="k">홉</div><div class="v"><span id="hop">–</span><small> ms</small></div></div>
     <div class="card"><div class="k">실시간</div><div class="v" id="rt">–</div></div>
   </div>
+  <div class="hud">
+    <div class="card"><div class="k">진행</div><div class="v" id="prog">0%</div></div>
+    <div class="card"><div class="k">평균</div><div class="v"><span id="avg">–</span><small> ms</small></div></div>
+    <div class="card"><div class="k">p95</div><div class="v"><span id="p95">–</span><small> ms</small></div></div>
+  </div>
   <div class="controls"><button id="play">▶ TTS + 아바타 립싱크</button></div>
   <div id="log"></div>
 </main>
@@ -125,7 +130,10 @@ async function initModel(){
     const wa=new ort.Tensor("float32",new Float32Array(WIN*SR),[1,WIN*SR]);
     const we=new ort.Tensor("int32",new Int32Array([1]),[1]);
     const wt=new ort.Tensor("int32",new Int32Array([TS_OUT]),[1]);
-    for(let k=0;k<8;k++){ await s.run({audio:wa,emo_id:we,time_steps:wt}); }
+    for(let k=0;k<20;k++){ await s.run({audio:wa,emo_id:we,time_steps:wt}); }
+    // extra JIT stabilization with realistic chunk
+    const real=new ort.Tensor("float32", new Float32Array(WIN*SR), [1, WIN*SR]);
+    for(let k=0;k<10;k++){ await s.run({audio:real, emo_id:we, time_steps:wt}); }
     session=s;
     const dt=(performance.now()-t0)/1000;
     $("ep").textContent="EP: WASM·INT8"; $("ep").className="pill ok";
@@ -181,14 +189,17 @@ async function play(){
       applyBlendshape(out[Object.keys(out)[0]].data.slice(-FRAME));
       record(dt);
       i++;
+      $("prog") && ($("prog").textContent=Math.floor(i/total*100)+"%");  // live progress
       const targetMs=t0*1000 + i*HOP*1000;
       const wait=targetMs-ac.currentTime*1000;
       if(wait>0) await new Promise(r=>setTimeout(r,wait));
+      else await new Promise(r=>requestAnimationFrame(r)); // yield to render when ahead
       if(i%Math.ceil(total/10)===0) log(`… ${Math.floor(i/total*100)}%`);
     }
     if(!stopFlag){
       const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
       const sorted=[...latHist].sort((a,b)=>a-b); const p95=sorted[Math.floor(sorted.length*0.95)];
+      $("avg").textContent=mean.toFixed(0); $("p95").textContent=p95.toFixed(0);
       log(`✅ 평균 ${mean.toFixed(1)}ms / p95 ${p95.toFixed(1)}ms → ${mean<HOP*1000?"실시간 OK":"LAG"}`);
       playing=false;
     }
