@@ -365,13 +365,13 @@ function buildScene(){
       const faceRadius = faceW * 3.0;   // back off — full head + shoulders visible
       const safeMin = faceW * 1.2;       // safer distance
       // === USER-CONFIRMED framing (captured from debug HUD on iPhone) ===
-      // IMPORTANT: setTarget() triggers rebuildAnglesAndRadius() which DISCARDS
-      // alpha/beta/radius — so call setTarget FIRST, then set the angles.
-      cam.setTarget(new BABYLON.Vector3(0.00, 1.38, -0.11));  // user-tuned
+      // ROOT FIX for setTarget() discarding angles: pass cloneAlphaBetaRadius=true
+      // so setTarget moves the target WITHOUT recomputing alpha/beta/radius.
       cam.alpha  = Math.PI/2;                       // 1.57
       cam.beta   = 1.66;                            // user-tuned
       cam.radius = 0.94;                            // user-tuned
       cam.fov    = 0.60;                            // portrait lens
+      cam.setTarget(new BABYLON.Vector3(0.00, 1.38, -0.11), false, false, true); // cloneAlphaBetaRadius=true
       cam.lowerRadiusLimit = 0.15;                  // absolute floor; never overrides r=0.94
       cam.upperRadiusLimit = Math.max(8, totalH * 1.5);
       log("   카메라: faceW="+faceW.toFixed(2)+" radius="+cam.radius.toFixed(2)+" min=0.15 fov="+cam.fov.toFixed(2));
