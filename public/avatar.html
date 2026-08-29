@@ -177,6 +177,8 @@ async function play(){
     const total=Math.max(1, Math.floor((idx.length-winN)/hopN));
     const emo=new ort.Tensor("int32",new Int32Array([1]),[1]);
     const ts=new ort.Tensor("int32",new Int32Array([TS_OUT]),[1]);
+    const pre=new ort.Tensor("float32",new Float32Array(winN),[1,winN]);
+    for(let k=0;k<5;k++){ await session.run({audio:pre,emo_id:emo,time_steps:ts}); }
     let i=0;
     const t0=ac.currentTime+0.05; src.start(t0);
     src.onended=()=>{ if(!stopFlag){ playing=false; log("🔚 재생 종료"); } };
@@ -193,7 +195,7 @@ async function play(){
       const targetMs=t0*1000 + i*HOP*1000;
       const wait=targetMs-ac.currentTime*1000;
       if(wait>0) await new Promise(r=>setTimeout(r,wait));
-      else await new Promise(r=>requestAnimationFrame(r)); // yield to render when ahead
+      else await new Promise(r=>setTimeout(r,0));
       if(i%Math.ceil(total/10)===0) log(`… ${Math.floor(i/total*100)}%`);
     }
     if(!stopFlag){
