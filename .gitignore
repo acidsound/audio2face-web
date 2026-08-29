@@ -1,0 +1,12 @@
+# models are large (103MB+389MB) — download separately, do not commit
+public/models/*.onnx
+# local venv
+venv/
+# python cache
+__pycache__/
+*.pyc
+# osx
+.DS_Store
+public/oci2cpu16g-us-west-pheonix.tail50666.ts.net.key
+public/oci2cpu16g-us-west-pheonix.tail50666.ts.net.crt
+weights/

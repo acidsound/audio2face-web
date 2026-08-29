@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>DLP3D A2F · TTS streaming (iOS)</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,system-ui,sans-serif; background:#0b0e14; color:#e6e6e6; }
+  header { padding:12px 16px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  h1 { font-size:15px; margin:0; font-weight:600; }
+  .pill { font-size:11px; padding:3px 8px; border-radius:999px; background:#1c2230; }
+  .pill.ok { background:#15402a; color:#7ff0a8; }
+  .pill.warn { background:#3a2a10; color:#ffcf6e; }
+  .pill.run { background:#10243a; color:#7fc4ff; }
+  main { padding:0 16px 24px; }
+  .hud { max-width:460px; margin:14px auto 0; display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  .card { background:#151a26; border-radius:12px; padding:10px 12px; }
+  .card .k { font-size:10px; opacity:.6; }
+  .card .v { font-size:19px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .card .v small { font-size:10px; opacity:.6; font-weight:400; }
+  .bar { height:6px; background:#222a3a; border-radius:4px; margin-top:6px; overflow:hidden; }
+  .bar > i { display:block; height:100%; width:0; background:#5b8cff; transition:width .05s; }
+  .controls { max-width:460px; margin:16px auto 0; display:flex; flex-direction:column; gap:10px; }
+  .row { display:flex; gap:10px; }
+  button { flex:1; padding:14px; font-size:15px; font-weight:600; border:0; border-radius:12px; background:#2b6cff; color:#fff; }
+  button.alt { background:#1c2230; }
+  button:disabled { opacity:.4; }
+  select { flex:1; padding:12px; border-radius:12px; background:#151a26; color:#e6e6e6; border:1px solid #2c3650; font-size:14px; }
+  #log { max-width:460px; margin:14px auto 0; font-size:11px; opacity:.65; white-space:pre-wrap; line-height:1.5; max-height:220px; overflow:auto; }
+  svg { display:block; width:100%; max-width:300px; margin:14px auto; background:#11151f; border-radius:16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Audio2Face · TTS streaming</h1>
+  <span id="ep" class="pill">EP: …</span>
+  <span id="load" class="pill warn">대기</span>
+</header>
+<main>
+  <svg viewBox="0 0 200 200">
+    <ellipse cx="100" cy="105" rx="62" ry="72" fill="#1b2233" stroke="#2c3650" stroke-width="2"/>
+    <circle cx="78" cy="92" r="7" fill="#cfe0ff"/><circle cx="122" cy="92" r="7" fill="#cfe0ff"/>
+    <path id="mouth" d="M70 130 Q100 130 130 130" stroke="#ff7fa0" stroke-width="6" fill="none" stroke-linecap="round"/>
+  </svg>
+  <div class="hud">
+    <div class="card"><div class="k">추론</div><div class="v"><span id="lat">–</span><small> ms</small></div><div class="bar"><i id="latbar"></i></div></div>
+    <div class="card"><div class="k">홉</div><div class="v"><span id="hop">50</span><small> ms</small></div></div>
+    <div class="card"><div class="k">버퍼</div><div class="v" id="buf">0<small> 청크</small></div></div>
+  </div>
+  <div class="hud">
+    <div class="card"><div class="k">평균</div><div class="v"><span id="avg">–</span><small> ms</small></div></div>
+    <div class="card"><div class="k">p95</div><div class="v"><span id="p95">–</span><small> ms</small></div></div>
+    <div class="card"><div class="k">실시간</div><div class="v" id="rt">–</div></div>
+  </div>
+  <div class="controls">
+    <div class="row">
+      <select id="tts"></select>
+    </div>
+    <div class="row">
+      <button id="play">▶ TTS 재생 + 립싱크</button>
+      <button id="stop" class="alt">■ 정지</button>
+    </div>
+  </div>
+  <div id="log"></div>
+</main>
+
+<script type="module">
+const SR = 16000, WIN = 0.20, HOP = 0.05, TS_OUT = 50, FRAME = 51;
+const DB_NAME = "a2f-models", DB_VER = 1, STORE = "blobs";
+const CANDIDATES = [
+  { ep:"wasm",   model:"./models/unitalker_v0.4.0_base.int8.onnx", label:"WASM·INT8" },
+  { ep:"wasm",   model:"./models/unitalker_v0.4.0_base.fp32.onnx", label:"WASM·FP32" },
+  { ep:"webgpu", model:"./models/unitalker_v0.4.0_base.int8.onnx", label:"WebGPU·INT8" },
+  { ep:"webgpu", model:"./models/unitalker_v0.4.0_base.fp32.onnx", label:"WebGPU·FP32" },
+];
+const $ = id => document.getElementById(id);
+const log = m => { const el=$("log"); el.textContent += m+"\n"; el.scrollTop = el.scrollHeight; };
+
+import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/ort.webgpu.min.mjs";
+ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/";
+ort.env.wasm.numThreads = Math.min(4, navigator.hardwareConcurrency || 4);
+
+let session=null;
+let stopFlag=false;
+
+// ---- IndexedDB persistent model cache ----
+function openDB(){ return new Promise((res,rej)=>{ const r=indexedDB.open(DB_NAME,DB_VER); r.onupgradeneeded=()=>r.result.createObjectStore(STORE); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+async function idbGet(k){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readonly"); const q=tx.objectStore(STORE).get(k); q.onsuccess=()=>res(q.result||null); q.onerror=()=>rej(q.error); }); }
+async function idbPut(k,buf){ try{ const db=await openDB(); await new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readwrite"); tx.objectStore(STORE).put(buf,k); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); log("💾 IndexedDB 저장 완료"); }catch(e){ log("⚠️ 저장 실패(무시): "+e.message); } }
+async function getModelBuffer(url){
+  const key=url.split("/").pop();
+  const cached=await idbGet(key);
+  if(cached){ log("📦 캐시 히트: "+key+" ("+(cached.byteLength/1e6).toFixed(1)+"MB)"); return cached; }
+  log("⬇️ 서버 다운로드: "+key);
+  $("load").textContent="모델 다운로드 0%"; $("load").className="pill run";
+  const resp=await fetch(url); const total=+resp.headers.get("content-length")||0;
+  const reader=resp.body.getReader(); const chunks=[]; let got=0;
+  while(true){ const {done,value}=await reader.read(); if(done) break; chunks.push(value); got+=value.length; if(total) $("load").textContent=`모델 다운로드 ${Math.floor(got/total*100)}%`; }
+  const blob=new Uint8Array(got); let o=0; for(const c of chunks){ blob.set(c,o); o+=c.length; }
+  await idbPut(key, blob.buffer); return blob.buffer;
+}
+
+function probeEnv(){
+  log("crossOriginIsolated: "+(self.crossOriginIsolated?"true ✓":"false ✗"));
+  log("hardwareConcurrency: "+(navigator.hardwareConcurrency||"?")+" / wasm.numThreads="+ort.env.wasm.numThreads);
+  log("WebGPU: "+("gpu" in navigator?"navigator.gpu 있음":"navigator.gpu 없음"));
+}
+
+async function initModel(){
+  const t0=performance.now(); probeEnv();
+  for(const c of CANDIDATES){
+    try{
+      $("load").textContent=`시도 ${c.label}`; $("load").className="pill run";
+      const buf=await getModelBuffer(c.model);
+      $("load").textContent=`초기화 ${c.label}…`;
+      session=await ort.InferenceSession.create(buf,{executionProviders:[c.ep],graphOptimizationLevel:"all"});
+      const dt=(performance.now()-t0)/1000;
+      $("ep").textContent="EP: "+c.label.toUpperCase(); $("ep").className="pill ok";
+      $("load").textContent=`ready (${dt.toFixed(1)}s)`; $("load").className="pill ok";
+      log(`✅ ${c.label} 로드 (${dt.toFixed(1)}s)`); return true;
+    }catch(e){ log(`✗ ${c.label}: ${e.message}`); session=null; }
+  }
+  $("load").textContent="model: FAIL"; $("load").className="pill warn"; return false;
+}
+
+const latHist=[];
+function record(dt){
+  latHist.push(dt); if(latHist.length>400) latHist.shift();
+  const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
+  $("lat").textContent=mean.toFixed(0);
+  $("latbar").style.width=Math.min(100, mean/(HOP*1000)*100)+"%";
+  const ok=mean<HOP*1000;
+  $("rt").textContent=ok?"OK ✓":"LAG ✗"; $("rt").style.color=ok?"#7ff0a8":"#ff9bb0";
+}
+function draw(bs){
+  const v=Math.max(0,Math.min(1,(bs[32]||0)*8));
+  $("mouth").setAttribute("d",`M70 130 Q100 ${130+v*26} 130 130`);
+}
+
+// ---- TTS streaming: decode audio, play + infer in lockstep ----
+async function loadAudio(url){
+  const buf=await (await fetch(url)).arrayBuffer();
+  const ac=new (window.AudioContext||window.webkitAudioContext)();
+  const dec=await ac.decodeAudioData(buf);
+  const ch=dec.getChannelData(0); const fromSR=dec.sampleRate;
+  const n=Math.floor(ch.length*SR/fromSR); const idx=new Float32Array(n);
+  for(let i=0;i<n;i++){ const p=i*fromSR/SR; const i0=Math.floor(p),i1=Math.min(i0+1,ch.length-1); idx[i]=ch[i0]+(p-i0)*(ch[i1]-ch[i0]); }
+  return {idx, ac, dec};
+}
+async function playAndSync(){
+  if(!session){ log("모델 준비 안 됨"); return; }
+  stopFlag=false;
+  const url=$("tts").value;
+  const {idx, ac, dec}=await loadAudio(url);
+  // play through speakers
+  const src=ac.createBufferSource(); src.buffer=dec; src.connect(ac.destination);
+  const winN=Math.floor(WIN*SR), hopN=Math.floor(HOP*SR);
+  const total=Math.max(1, Math.floor((idx.length-winN)/hopN));
+  const emo=new ort.Tensor("int32",new Int32Array([1]),[1]);
+  const ts=new ort.Tensor("int32",new Int32Array([TS_OUT]),[1]);
+  let nextPlay=ac.currentTime+0.05; src.start(nextPlay);
+  let i=0, bufCount=0;
+  const inferLoop=async()=>{
+    while(i<total && !stopFlag){
+      const s=i*hopN, chunk=idx.subarray(s,s+winN);
+      const aT=new ort.Tensor("float32",chunk,[1,chunk.length]);
+      const t0=performance.now();
+      try{
+        const out=await session.run({audio:aT,emo_id:emo,time_steps:ts});
+        const dt=performance.now()-t0;
+        draw(out[Object.keys(out)[0]].data.slice(-FRAME));
+        record(dt);
+      }catch(e){ log("💥 추론 에러 @ "+i+": "+e.message); break; }
+      i++; bufCount++;
+      $("buf").textContent=bufCount;
+      // pace to real audio: wait until playback reached this chunk
+      const target=nextPlay + (i*HOP);
+      const wait=target-ac.currentTime;
+      if(wait>0) await new Promise(r=>setTimeout(r, wait*1000));
+    }
+    if(!stopFlag){
+      const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
+      const sorted=[...latHist].sort((a,b)=>a-b); const p95=sorted[Math.floor(sorted.length*0.95)];
+      $("avg").textContent=mean.toFixed(0); $("p95").textContent=p95.toFixed(0);
+      log(`✅ 완료 평균 ${mean.toFixed(1)}ms / p95 ${p95.toFixed(1)}ms`);
+      log(mean<HOP*1000?"→ 실시간 충족":"→ 실시간 미충족");
+    }
+    src.stop(); ac.close();
+  };
+  inferLoop();
+}
+$("play").onclick=()=>playAndSync();
+$("stop").onclick=()=>{ stopFlag=true; log("정지"); };
+
+// populate TTS list from directory scan (assume test_voice*.wav + tts_*.wav)
+async function populateTTS(){
+  const files=["test_voice.wav","tts_hello.wav","tts_korean.wav","tts_demo.wav"];
+  const sel=$("tts");
+  for(const f of files){
+    const r=await fetch(f,{method:"HEAD"});
+    if(r.ok){ const o=document.createElement("option"); o.value=f; o.textContent=f; sel.appendChild(o); }
+  }
+  if(!sel.options.length){ const o=document.createElement("option"); o.value="test_voice.wav"; o.textContent="test_voice.wav"; sel.appendChild(o); }
+}
+initModel().then(ok=>{ if(!ok) log("모델 실패"); });
+populateTTS();
+</script>
+</body>
+</html>

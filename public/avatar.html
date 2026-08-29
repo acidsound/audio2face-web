@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>DLP3D A2F · avatar rig (iOS)</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,system-ui,sans-serif; background:#0b0e14; color:#e6e6e6; }
+  header { padding:12px 16px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  h1 { font-size:15px; margin:0; font-weight:600; }
+  .pill { font-size:11px; padding:3px 8px; border-radius:999px; background:#1c2230; }
+  .pill.ok { background:#15402a; color:#7ff0a8; }
+  .pill.warn { background:#3a2a10; color:#ffcf6e; }
+  .pill.run { background:#10243a; color:#7fc4ff; }
+  main { padding:0 16px 24px; }
+  #canvas { width:100%; max-width:480px; height:360px; display:block; margin:14px auto; background:#11151f; border-radius:16px; touch-action:none; }
+  .hud { max-width:480px; margin:14px auto 0; display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  .card { background:#151a26; border-radius:12px; padding:10px 12px; }
+  .card .k { font-size:10px; opacity:.6; }
+  .card .v { font-size:19px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .card .v small { font-size:10px; opacity:.6; font-weight:400; }
+  .controls { max-width:480px; margin:16px auto 0; display:flex; gap:10px; }
+  button { flex:1; padding:14px; font-size:15px; font-weight:600; border:0; border-radius:12px; background:#2b6cff; color:#fff; }
+  button:disabled { opacity:.4; }
+  #log { max-width:480px; margin:14px auto 0; font-size:11px; opacity:.65; white-space:pre-wrap; line-height:1.5; max-height:200px; overflow:auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Audio2Face · avatar rig</h1>
+  <span id="ep" class="pill">EP: …</span>
+  <span id="load" class="pill warn">대기</span>
+</header>
+<main>
+  <canvas id="canvas"></canvas>
+  <div class="hud">
+    <div class="card"><div class="k">추론</div><div class="v"><span id="lat">–</span><small> ms</small></div></div>
+    <div class="card"><div class="k">홉</div><div class="v"><span id="hop">50</span><small> ms</small></div></div>
+    <div class="card"><div class="k">실시간</div><div class="v" id="rt">–</div></div>
+  </div>
+  <div class="controls"><button id="play">▶ TTS + 아바타 립싱크</button></div>
+  <div id="log"></div>
+</main>
+
+<script type="module">
+import * as BABYLON from "https://cdn.jsdelivr.net/npm/babylonjs@7.54.0/babylon.max.mjs";
+import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/ort.webgpu.min.mjs";
+
+const SR=16000, WIN=0.20, HOP=0.05, TS_OUT=50, FRAME=51;
+const DB_NAME="a2f-models", DB_VER=1, STORE="blobs";
+const CANDIDATES=[
+  { ep:"wasm", model:"./models/unitalker_v0.4.0_base.int8.onnx", label:"WASM·INT8" },
+  { ep:"wasm", model:"./models/unitalker_v0.4.0_base.fp32.onnx", label:"WASM·FP32" },
+];
+const $=id=>document.getElementById(id);
+const log=m=>{ const el=$("log"); el.textContent+=m+"\n"; el.scrollTop=el.scrollHeight; };
+ort.env.wasm.wasmPaths="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/";
+ort.env.wasm.numThreads=Math.min(4, navigator.hardwareConcurrency||4);
+
+let session=null, engine=null, scene=null, mouthTarget=null, stopFlag=false;
+
+// ---- Babylon scene: procedural head with mouth-open morph target ----
+// (Replace loadGLB() with a real DLP3D avatar GLB to map all 51 blendshapes)
+function buildScene(){
+  const canvas=$("canvas");
+  engine=new BABYLON.Engine(canvas, true, {preserveDrawingBuffer:true, stencil:true});
+  scene=new BABYLON.Scene(engine);
+  scene.clearColor=new BABYLON.Color4(0.07,0.08,0.10,1);
+  new BABYLON.ArcRotateCamera("cam", -Math.PI/2, Math.PI/2, 4, BABYLON.Vector3.Zero(), scene).attachControl(canvas,true);
+  new BABYLON.HemisphericLight("l", new BABYLON.Vector3(0,1,0), scene);
+  // head sphere
+  const head=BABYLON.MeshBuilder.CreateSphere("head",{diameter:2,segments:24},scene);
+  head.material=new BABYLON.StandardMaterial("m",scene); head.material.diffuseColor=new BABYLON.Color3(0.6,0.65,0.8);
+  // morph: mouth open (scale lower-front vertices down + forward)
+  const mgr=new BABYLON.MorphTargetManager();
+  head.morphTargetManager=mgr;
+  const positions=head.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+  const mouth=new Float32Array(positions.length);
+  for(let v=0; v<positions.length; v+=3){
+    const x=positions[v], y=positions[v+1], z=positions[v+2];
+    // mouth region: lower front of face
+    if(y<-0.2 && z>0.4){ mouth[v+1]=y-0.35; mouth[v+2]=z+0.05; }
+  }
+  const mt=new BABYLON.MorphTarget("mouthOpen", 0);
+  mt.setPositions(mouth);
+  mgr.addTarget(mt);
+  mouthTarget=mt;
+  engine.runRenderLoop(()=>scene.render());
+  log("🧊 Babylon 씬 준비 (프로시저럴 헤드 + mouthOpen morph)");
+}
+
+// ---- model cache (same as bench) ----
+function openDB(){ return new Promise((res,rej)=>{ const r=indexedDB.open(DB_NAME,DB_VER); r.onupgradeneeded=()=>r.result.createObjectStore(STORE); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+async function idbGet(k){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readonly"); const q=tx.objectStore(STORE).get(k); q.onsuccess=()=>res(q.result||null); q.onerror=()=>rej(q.error); }); }
+async function idbPut(k,buf){ try{ const db=await openDB(); await new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readwrite"); tx.objectStore(STORE).put(buf,k); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); }catch(e){ log("⚠️ 저장 실패: "+e.message); } }
+async function getModelBuffer(url){
+  const key=url.split("/").pop(); const cached=await idbGet(key);
+  if(cached){ log("📦 캐시 히트: "+key); return cached; }
+  log("⬇️ 다운로드: "+key);
+  const resp=await fetch(url); const total=+resp.headers.get("content-length")||0;
+  const reader=resp.body.getReader(); const chunks=[]; let got=0;
+  while(true){ const {done,value}=await reader.read(); if(done) break; chunks.push(value); got+=value.length; if(total) $("load").textContent=`다운로드 ${Math.floor(got/total*100)}%`; }
+  const blob=new Uint8Array(got); let o=0; for(const c of chunks){ blob.set(c,o); o+=c.length; }
+  await idbPut(key,blob.buffer); return blob.buffer;
+}
+async function initModel(){
+  const t0=performance.now();
+  for(const c of CANDIDATES){
+    try{
+      $("load").textContent=`시도 ${c.label}`;
+      const buf=await getModelBuffer(c.model);
+      session=await ort.InferenceSession.create(buf,{executionProviders:[c.ep],graphOptimizationLevel:"all"});
+      const dt=(performance.now()-t0)/1000;
+      $("ep").textContent="EP: "+c.label.toUpperCase(); $("ep").className="pill ok";
+      $("load").textContent=`ready (${dt.toFixed(1)}s)`; $("load").className="pill ok";
+      log(`✅ ${c.label} 로드 (${dt.toFixed(1)}s)`); return true;
+    }catch(e){ log(`✗ ${c.label}: ${e.message}`); }
+  }
+  $("load").textContent="FAIL"; return false;
+}
+
+// blendshape(51) → avatar. Currently maps mouth channel (32) to mouthOpen morph.
+// Full DLP3D rig: each of 51 channels → corresponding morph target on the GLB.
+function applyBlendshape(bs){
+  if(!mouthTarget) return;
+  const mouthVal=Math.max(0,Math.min(1,(bs[32]||0)*8));
+  mouthTarget.influence=mouthVal;
+}
+
+const latHist=[];
+function record(dt){
+  latHist.push(dt); if(latHist.length>400) latHist.shift();
+  const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
+  $("lat").textContent=mean.toFixed(0);
+  const ok=mean<HOP*1000; $("rt").textContent=ok?"OK ✓":"LAG ✗"; $("rt").style.color=ok?"#7ff0a8":"#ff9bb0";
+}
+async function loadAudio(url){
+  const buf=await (await fetch(url)).arrayBuffer();
+  const ac=new (window.AudioContext||window.webkitAudioContext)();
+  const dec=await ac.decodeAudioData(buf);
+  const ch=dec.getChannelData(0); const fromSR=dec.sampleRate;
+  const n=Math.floor(ch.length*SR/fromSR); const idx=new Float32Array(n);
+  for(let i=0;i<n;i++){ const p=i*fromSR/SR; const i0=Math.floor(p),i1=Math.min(i0+1,ch.length-1); idx[i]=ch[i0]+(p-i0)*(ch[i1]-ch[i0]); }
+  return {idx,ac,dec};
+}
+async function play(){
+  if(!session){ log("모델 준비 안 됨"); return; }
+  stopFlag=false;
+  const {idx,ac,dec}=await loadAudio("./test_voice.wav");
+  const src=ac.createBufferSource(); src.buffer=dec; src.connect(ac.destination);
+  const winN=Math.floor(WIN*SR), hopN=Math.floor(HOP*SR);
+  const total=Math.max(1,Math.floor((idx.length-winN)/hopN));
+  const emo=new ort.Tensor("int32",new Int32Array([1]),[1]);
+  const ts=new ort.Tensor("int32",new Int32Array([TS_OUT]),[1]);
+  let i=0; const t0=ac.currentTime+0.05; src.start(t0);
+  while(i<total && !stopFlag){
+    const s=i*hopN, chunk=idx.subarray(s,s+winN);
+    const aT=new ort.Tensor("float32",chunk,[1,chunk.length]);
+    const ti=performance.now();
+    const out=await session.run({audio:aT,emo_id:emo,time_steps:ts});
+    record(performance.now()-ti);
+    applyBlendshape(out[Object.keys(out)[0]].data.slice(-FRAME));
+    i++;
+    const target=t0+i*HOP; const wait=target-ac.currentTime; if(wait>0) await new Promise(r=>setTimeout(r,wait*1000));
+  }
+  if(!stopFlag){
+    const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
+    const sorted=[...latHist].sort((a,b)=>a-b); const p95=sorted[Math.floor(sorted.length*0.95)];
+    log(`✅ 평균 ${mean.toFixed(1)}ms / p95 ${p95.toFixed(1)}ms → ${mean<HOP*1000?"실시간 OK":"LAG"}`);
+  }
+  src.stop(); ac.close();
+}
+$("play").onclick=()=>play();
+
+buildScene();
+initModel().then(ok=>{ if(!ok) log("모델 실패"); });
+</script>
+</body>
+</html>
