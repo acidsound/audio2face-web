@@ -86,7 +86,7 @@ const MAP = {
 // Mouth-open now mapped to a visible 0.1(closed)~0.8(open) band via MOUTH_* below.
 const AMP = { "い":1.3, "う":1.3, "え":1.3, "お":1.3, "口横広げ":1.3, "口角上げ":1.3 };
 // mouth-open remap: raw model jawOpen [0..1] → influence band [MOUTH_MIN..MOUTH_MAX]
-const MOUTH_MIN = 0.10;
+const MOUTH_MIN = 0.02;   // near-shut at rest (was 0.10 — mouth hovered too open)
 const MOUTH_MAX = 0.80;
 let _rawJawLog = -1;
 const DBG_BS = new URLSearchParams(location.search).get("dbg")==="bs";
@@ -137,7 +137,10 @@ function applyBlendshape(bs){
     const ti=targetNames.indexOf(MAP[k]);
     if(ti>=0){
       if(MAP[k]==="あ"){
-        targetInf[ti]=Math.max(targetInf[ti]||0, MOUTH_MIN + (MOUTH_MAX-MOUTH_MIN)*raw);
+        // model jawOpen sits ~0.2 during speech; gamma<1 expands the low (closed) range
+        // so the mouth actually returns near-shut between syllables instead of hovering ~0.25.
+        const g = Math.pow(raw, 1.7);
+        targetInf[ti]=Math.max(targetInf[ti]||0, MOUTH_MIN + (MOUTH_MAX-MOUTH_MIN)*g);
       } else if(MAP[k]==="まばたき"){
         // skip — blink is driven by independent idle timer, not model output
         continue;
