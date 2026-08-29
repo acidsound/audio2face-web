@@ -257,12 +257,27 @@ function buildScene(){
   cam.useFramingBehavior=false;
   // custom panning: enable when shift is held
   let _shiftDown=false;
-  window.addEventListener("keydown",(e)=>{ if(e.key==="Shift") _shiftDown=true; });
-  window.addEventListener("keyup",(e)=>{ if(e.key==="Shift"){ _shiftDown=false; cam.panningSensibility=0; } });
-  // enable panning only while shift+drag
-  canvas.addEventListener("pointerdown",(e)=>{ if(_shiftDown){ cam.panningSensibility=1500; } });
-  canvas.addEventListener("pointerup",()=>{ cam.panningSensibility=0; });
-  canvas.addEventListener("pointerleave",()=>{ cam.panningSensibility=0; });
+  // rotation sensitivity control (0 = freeze rotation, default ~1000)
+  const _ptr=cam.inputs.attached.pointers;
+  window.addEventListener("keydown",(e)=>{ if(e.key==="Shift"){
+    _shiftDown=true;
+    // freeze rotation, enable panning
+    _ptr.angularSensibilityX=0;
+    _ptr.angularSensibilityY=0;
+    cam.panningSensibility=1500;
+  } });
+  window.addEventListener("keyup",(e)=>{ if(e.key==="Shift"){
+    _shiftDown=false;
+    _ptr.angularSensibilityX=1000;
+    _ptr.angularSensibilityY=1000;
+    cam.panningSensibility=0;
+  } });
+  // also catch shift lost while pointer held
+  window.addEventListener("blur",()=>{
+    if(_shiftDown){
+      _shiftDown=false; _ptr.angularSensibilityX=1000; _ptr.angularSensibilityY=1000; cam.panningSensibility=0;
+    }
+  });
   // HUD overlay for live debug
   const hud=document.createElement("div");
   hud.id="dbg";
