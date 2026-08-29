@@ -64,9 +64,10 @@ ort.env.wasm.numThreads=Math.min(4, navigator.hardwareConcurrency||4);
 let session=null, audioCtx=null, curSrc=null, stopFlag=false, playing=false, modelBufCache=null;
 let scene=null, renderLoop=null, faceMesh=null, targetMgr=null, targetNames=[];
 
-// UniTalker ARKit 51 → KQ VRM 61 target. 32(jawOpen)→あ amplified.
+// UniTalker ARKit 51 → KQ VRM 61 target.
+// eyeBlink (ARKit 0,1) is NOT mapped — UniTalker correlates blink with jawOpen, which reads
+// as awkward. Blink is driven by an independent idle timer (see startBlink) instead.
 const MAP = {
-  0:"まばたき", 1:"まばたき",
   8:"じと目", 9:"じと目", 10:"びっくり", 11:"びっくり",
   12:"口角上げ", 13:"口角上げ",
   14:"にこり", 15:"にこり", 16:"困る", 17:"困る",
@@ -84,9 +85,37 @@ const MAP = {
 // Mouth-open now mapped to a visible 0.1(closed)~0.8(open) band via MOUTH_* below.
 const AMP = { "い":1.3, "う":1.3, "え":1.3, "お":1.3, "口横広げ":1.3, "口角上げ":1.3, "にこり":1.2, "まばたき":1.0 };
 // mouth-open remap: raw model jawOpen [0..1] → influence band [MOUTH_MIN..MOUTH_MAX]
-const MOUTH_MIN = 0.10;   // closed-but-not-shut
-const MOUTH_MAX = 0.80;   // widest open (stay below 1.0 so it reads as "talking", not yelling)
+const MOUTH_MIN = 0.10;
+const MOUTH_MAX = 0.80;
 let _rawJawLog = -1;
+// independent idle blink (decoupled from mouth): drives まばたき target directly
+let BLINK_IDX = -1;          // targetNames index of まばたき
+let blinkVal = 0;            // current blink amount 0..1
+let blinkTimer = null;
+function scheduleBlink(){
+  const wait = 2200 + Math.random()*3200;   // 2.2~5.4s between blinks
+  blinkTimer = setTimeout(async ()=>{
+    // double-blink chance
+    await doBlink();
+    if(Math.random()<0.25) await doBlink();
+    scheduleBlink();
+  }, wait);
+}
+function doBlink(){
+  return new Promise(res=>{
+    const closeMs=90, openMs=140;
+    const t0=performance.now();
+    const step=()=>{
+      const e=performance.now()-t0;
+      if(e<closeMs){ blinkVal = e/closeMs; }
+      else if(e<closeMs+openMs){ blinkVal = 1-(e-closeMs)/openMs; }
+      else { blinkVal = 0; res(); return; }
+      if(BLINK_IDX>=0 && targetMgr){ targetMgr.getTarget(BLINK_IDX).influence = blinkVal; }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
+}
 
 function getAudioCtx(){
   if(!audioCtx){ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }
@@ -102,8 +131,10 @@ function applyBlendshape(bs){
     const ti=targetNames.indexOf(MAP[k]);
     if(ti>=0){
       if(MAP[k]==="あ"){
-        // remap raw jawOpen into visible talking band [MOUTH_MIN..MOUTH_MAX]
         targetInf[ti]=Math.max(targetInf[ti]||0, MOUTH_MIN + (MOUTH_MAX-MOUTH_MIN)*raw);
+      } else if(MAP[k]==="まばたき"){
+        // skip — blink is driven by independent idle timer, not model output
+        continue;
       } else {
         const amp = AMP[MAP[k]] || 1.0;
         targetInf[ti]=Math.max(targetInf[ti]||0, Math.min(1, raw*amp));
@@ -111,6 +142,7 @@ function applyBlendshape(bs){
     }
   }
   for(let i=0;i<targetMgr.numTargets;i++){
+    if(i===BLINK_IDX) continue;   // blink owned by idle timer, not model output
     const tgt=targetInf[i]||0;
     const cur=targetMgr.getTarget(i).influence||0;
     targetMgr.getTarget(i).influence = cur + (tgt-cur)*LERP;
@@ -354,6 +386,10 @@ function buildScene(){
     else {
       log("🧊 GLB 로드 — morph targets: "+targetNames.length+"개");
       log("   あ OK: "+(targetNames.indexOf("あ")>=0));
+      // independent idle blink: find まばたき target, start decoupled timer
+      BLINK_IDX = targetNames.indexOf("まばたき");
+      if(BLINK_IDX>=0 && !blinkTimer){ scheduleBlink(); log("   idle blink: まばたき(idx="+BLINK_IDX+") 타이머 시작"); }
+      else if(BLINK_IDX<0){ log("   ⚠️ まばたき 타깃 없음"); }
       // --- Cell-shading outline: Babylon OutlineRenderer (core, distance-independent) ---
       // GeometryBuffer/PrePass depth&normal textures are unavailable in this env (both return
       // depthTex=NO), so screen-space edge detection is impossible. OutlineRenderer draws a
