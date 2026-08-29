@@ -80,8 +80,13 @@ const MAP = {
   45:"あ", 46:"口横狭め", 47:"ω", 48:"あ", 49:"え", 50:"い",
   51:"う", 52:"え", 53:"お", 54:"あ", 55:"い", 56:"う", 57:"お", 58:"あ", 59:"う", 60:"え"
 };
-// amp: per-target influence scale (jawOpen→あ boosted 1.5x for visible mouth)
-const AMP = { "あ":1.5, "い":1.3, "う":1.3, "え":1.3, "お":1.3, "口横広げ":1.3, "口角上げ":1.3, "にこり":1.2, "まばたき":1.0 };
+// amp: per-target influence scale. あ boost removed (was 1.5 → clamp at 0.53, mouth stuck open).
+// Mouth-open now mapped to a visible 0.1(closed)~0.8(open) band via MOUTH_* below.
+const AMP = { "い":1.3, "う":1.3, "え":1.3, "お":1.3, "口横広げ":1.3, "口角上げ":1.3, "にこり":1.2, "まばたき":1.0 };
+// mouth-open remap: raw model jawOpen [0..1] → influence band [MOUTH_MIN..MOUTH_MAX]
+const MOUTH_MIN = 0.10;   // closed-but-not-shut
+const MOUTH_MAX = 0.80;   // widest open (stay below 1.0 so it reads as "talking", not yelling)
+let _rawJawLog = -1;
 
 function getAudioCtx(){
   if(!audioCtx){ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }
@@ -93,11 +98,16 @@ function applyBlendshape(bs){
   const LERP=0.30;  // faster than 0.15 for visible mouth motion
   const targetInf={};
   for(const k in MAP){
-    const v=Math.max(0,Math.min(1,(bs[+k]||0)));
+    const raw=Math.max(0,Math.min(1,(bs[+k]||0)));
     const ti=targetNames.indexOf(MAP[k]);
     if(ti>=0){
-      const amp = AMP[MAP[k]] || 1.0;
-      targetInf[ti]=Math.max(targetInf[ti]||0, Math.min(1, v*amp));
+      if(MAP[k]==="あ"){
+        // remap raw jawOpen into visible talking band [MOUTH_MIN..MOUTH_MAX]
+        targetInf[ti]=Math.max(targetInf[ti]||0, MOUTH_MIN + (MOUTH_MAX-MOUTH_MIN)*raw);
+      } else {
+        const amp = AMP[MAP[k]] || 1.0;
+        targetInf[ti]=Math.max(targetInf[ti]||0, Math.min(1, raw*amp));
+      }
     }
   }
   for(let i=0;i<targetMgr.numTargets;i++){
