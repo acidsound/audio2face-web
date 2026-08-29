@@ -64,13 +64,25 @@ ort.env.wasm.numThreads=Math.min(4, navigator.hardwareConcurrency||4);
 let session=null, audioCtx=null, curSrc=null, stopFlag=false, playing=false, modelBufCache=null;
 let scene=null, renderLoop=null, faceMesh=null, targetMgr=null, targetNames=[], lastBS=null;
 
-// UniTalker 51 (ARKit order) → VRM 64 target (approx). Key channel = jawOpen→あ.
+// UniTalker 51 (ARKit order) → KQ VRM 61 target (Japanese) accurate mapping
+// ARKit indices: 0 eyeBlinkL,1 eyeBlinkR,8 eyeSquintL/R,10 eyeWideL/R,
+// 12 mouthL/R,14 smileL/R,16 frownL/R,18 openL/R,26 stretchL/R,28 pucker,
+// 32 jawOpen,34/35 jawL/R,38 funnel,40 pucker,42 mouthL/R,44 tongue,45-50 visemes
 const MAP = {
-  0:"まばたき", 1:"まばたき", 32:"あ", 22:"にこり", 23:"にこり", 24:"にっこり",
-  25:"口角上げ", 26:"口角上げ", 27:"ω", 28:"ω", 29:"お", 30:"お", 31:"あ",
-  33:"い", 34:"う", 35:"え", 36:"お", 37:"い", 38:"う", 39:"え",
-  40:"あ", 41:"い", 42:"う", 43:"え", 44:"お", 45:"あ", 46:"い", 47:"う", 48:"え", 49:"お",
-  4:"びっくり", 5:"びっくり", 7:"なごみ", 8:"なごみ", 9:"真面目"
+  0:"まばたき", 1:"まばたき",
+  8:"じと目", 9:"じと目", 10:"びっくり", 11:"びっくり",
+  12:"口角上げ", 13:"口角上げ",
+  14:"にこり", 15:"にこり", 16:"困る", 17:"困る",
+  18:"あ", 19:"あ",
+  26:"口横広げ", 27:"口横広げ",
+  28:"ω", 29:"ω",
+  32:"あ", 33:"あ", 34:"あ", 35:"あ",
+  36:"あ", 37:"あ", 38:"お", 39:"お",
+  40:"ω", 41:"ω", 42:"口角上げ", 43:"口角上げ",
+  44:"舌広げ",
+  // visemes (ARKit 45-50): sil, PP, FF, TH, DD, kk, CH, SS, nn, RR, aa, E, I, O, U, W
+  45:"あ", 46:"口横狭め", 47:"ω", 48:"あ", 49:"え", 50:"い",
+  51:"う", 52:"え", 53:"お", 54:"あ", 55:"い", 56:"う", 57:"お", 58:"あ", 59:"う", 60:"え"
 };
 
 function getAudioCtx(){
@@ -80,12 +92,11 @@ function getAudioCtx(){
 }
 function applyBlendshape(bs){
   if(!targetMgr) return;
-  // smooth lerp from current → target for natural motion
-  const LERP=0.35;
-  // build target influence map
+  const LERP=0.4;
   const targetInf={};
   for(const k in MAP){
-    const v=Math.max(0,Math.min(1,(bs[+k]||0)*8));
+    // UniTalker output is already ~0..1 normalized; clamp, no *8
+    const v=Math.max(0,Math.min(1,(bs[+k]||0)));
     const ti=targetNames.indexOf(MAP[k]);
     if(ti>=0) targetInf[ti]=Math.max(targetInf[ti]||0, v);
   }
@@ -255,11 +266,11 @@ function buildScene(){
         minZ=Math.min(minZ,lo.z); maxZ=Math.max(maxZ,hi.z);
       }
       const cx=(minX+maxX)/2, cz=(minZ+maxZ)/2;
-      const cy=minY+(maxY-minY)*0.80; // aim at head
+      const cy=minY+(maxY-minY)*0.85; // aim at face (upper)
       cam.setTarget(new BABYLON.Vector3(cx,cy,cz));
       const h=maxY-minY;
-      cam.radius=Math.max(1.0, h*0.6);    // face well-framed, no clip-through
-      cam.lowerRadiusLimit=Math.max(0.5, h*0.25);  // don't pass through head
+      cam.radius=Math.max(0.8, h*0.35);    // face close-up
+      cam.lowerRadiusLimit=Math.max(0.4, h*0.18);  // no clip-through head
       cam.upperRadiusLimit=20;
       // idle: stop all default animations (no greeting/spin)
       sc.animationGroups.forEach(g=>g.stop());
