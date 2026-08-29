@@ -103,7 +103,7 @@ function scheduleBlink(){
 }
 function doBlink(){
   return new Promise(res=>{
-    const closeMs=90, openMs=140;
+    const closeMs=120, openMs=150;
     const t0=performance.now();
     const step=()=>{
       const e=performance.now()-t0;
@@ -124,7 +124,8 @@ function getAudioCtx(){
 }
 function applyBlendshape(bs){
   if(!targetMgr) return;
-  const LERP=0.30;  // faster than 0.15 for visible mouth motion
+  const LERP_OPEN = 0.35;   // attack: mouth opens quickly to follow speech
+  const LERP_CLOSE = 0.12;  // release: mouth eases shut (exponential ease-out tail, no snap)
   const targetInf={};
   for(const k in MAP){
     const raw=Math.max(0,Math.min(1,(bs[+k]||0)));
@@ -145,7 +146,9 @@ function applyBlendshape(bs){
     if(i===BLINK_IDX) continue;   // blink owned by idle timer, not model output
     const tgt=targetInf[i]||0;
     const cur=targetMgr.getTarget(i).influence||0;
-    targetMgr.getTarget(i).influence = cur + (tgt-cur)*LERP;
+    // exponential ease-out on close: pick lerp by direction
+    const L = (tgt>cur) ? LERP_OPEN : LERP_CLOSE;
+    targetMgr.getTarget(i).influence = cur + (tgt-cur)*L;
   }
 }
 function resetMouth(){
