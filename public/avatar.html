@@ -242,7 +242,7 @@ function buildScene(){
   cam.wheelDeltaPercentage=0.01;
   cam.pinchDeltaPercentage=0.01;
   cam.panningSensibility=0; // disable panning
-  cam.fov=0.45; // narrower FOV → face close-up with less distortion
+  cam.fov=0.7; // wider FOV → full face visible from reasonable distance
   cam.minZ=0.01; // allow very near plane
   new BABYLON.HemisphericLight("l",new BABYLON.Vector3(0,1,0),sc);
   scene=sc; renderLoop=eng;
@@ -275,16 +275,16 @@ function buildScene(){
         minZ=Math.min(minZ,lo.z); maxZ=Math.max(maxZ,hi.z);
       }
       const cx=(minX+maxX)/2, cz=(minZ+maxZ)/2;
-      // aim at face center: ~92% of body height (face center, not top of head)
-      const headY=minY+(maxY-minY)*0.92;
+      // aim at face center: ~88% of body height (eyes→mouth center)
+      const headY=minY+(maxY-minY)*0.88;
       // shoulderWidth as face width proxy
       const totalH = maxY-minY;
       const shoulderW = (maxX-minX);
       // face width is ~25% of shoulder width for typical anime
       const faceW = Math.max(0.08, shoulderW*0.25);
       // close-up: distance = faceW * 1.5 (inside-head), but clamp prevents
-      const faceRadius = faceW * 2.0;   // face fills screen
-      const safeMin = faceW * 0.6;       // can get very close (just outside skin)
+      const faceRadius = faceW * 2.5;   // reasonable distance with wider FOV
+      const safeMin = faceW * 0.8;       // close enough but outside skin
       cam.setTarget(new BABYLON.Vector3(cx, headY, cz));
       cam.radius = faceRadius;
       cam.lowerRadiusLimit = safeMin;
