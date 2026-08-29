@@ -55,9 +55,7 @@
     <div class="card"><div class="k">실시간</div><div class="v" id="rt">–</div></div>
   </div>
   <div class="controls">
-    <div class="row">
-      <select id="tts"></select>
-    </div>
+    <div class="row"><select id="tts"></select></div>
     <div class="row">
       <button id="play">▶ TTS 재생 + 립싱크</button>
       <button id="stop" class="alt">■ 정지</button>
@@ -67,95 +65,52 @@
 </main>
 
 <script type="module">
-const SR = 16000, WIN = 0.05, HOP = 0.05, TS_OUT = 50, FRAME = 51;
-const DB_NAME = "a2f-models", DB_VER = 1, STORE = "blobs";
-const CANDIDATES = [
-  { ep:"wasm",   model:"./models/unitalker_v0.4.0_base.int8.onnx", label:"WASM·INT8" },
-  { ep:"wasm",   model:"./models/unitalker_v0.4.0_base.fp32.onnx", label:"WASM·FP32" },
-  { ep:"webgpu", model:"./models/unitalker_v0.4.0_base.int8.onnx", label:"WebGPU·INT8" },
-  { ep:"webgpu", model:"./models/unitalker_v0.4.0_base.fp32.onnx", label:"WebGPU·FP32" },
-];
-const $ = id => document.getElementById(id);
-const log = m => { const el=$("log"); el.textContent += m+"\n"; el.scrollTop = el.scrollHeight; };
+const SR=16000, WIN=0.05, HOP=0.05, TS_OUT=50, FRAME=51;
+const DB_NAME="a2f-models", DB_VER=1, STORE="blobs";
+const MODEL_URL="./models/unitalker_v0.4.0_base.int8.onnx";
+const $ = id=>document.getElementById(id);
+const log = m=>{ const el=$("log"); el.textContent+=m+"\n"; el.scrollTop=el.scrollHeight; };
 
-import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/ort.webgpu.min.mjs";
-ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/";
-ort.env.wasm.numThreads = Math.min(4, navigator.hardwareConcurrency || 4);
+let audioCtx=null, curSrc=null, worker=null, stopFlag=false, playing=false;
+let modelBufCache=null;
 
-let stopFlag=false, audioCtx=null, curSrc=null, playing=false;
-
-// single AudioContext reused (iOS Safari: many contexts → silent + throttled)
 function getAudioCtx(){
-  if(!audioCtx){ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+  if(!audioCtx){ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }
   if(audioCtx.state==="suspended"){ audioCtx.resume(); }
   return audioCtx;
 }
-
-// ---- IndexedDB persistent model cache ----
-function openDB(){ return new Promise((res,rej)=>{ const r=indexedDB.open(DB_NAME,DB_VER); r.onupgradeneeded=()=>r.result.createObjectStore(STORE); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
-async function idbGet(k){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readonly"); const q=tx.objectStore(STORE).get(k); q.onsuccess=()=>res(q.result||null); q.onerror=()=>rej(q.error); }); }
-async function idbPut(k,buf){ try{ const db=await openDB(); await new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readwrite"); tx.objectStore(STORE).put(buf,k); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); log("💾 IndexedDB 저장 완료"); }catch(e){ log("⚠️ 저장 실패(무시): "+e.message); } }
-async function getModelBuffer(url){
-  const key=url.split("/").pop();
-  const cached=await idbGet(key);
-  if(cached){ log("📦 캐시 히트: "+key+" ("+(cached.byteLength/1e6).toFixed(1)+"MB)"); return cached; }
-  log("⬇️ 서버 다운로드: "+key);
-  $("load").textContent="모델 다운로드 0%"; $("load").className="pill run";
-  const resp=await fetch(url); const total=+resp.headers.get("content-length")||0;
-  const reader=resp.body.getReader(); const chunks=[]; let got=0;
-  while(true){ const {done,value}=await reader.read(); if(done) break; chunks.push(value); got+=value.length; if(total) $("load").textContent=`모델 다운로드 ${Math.floor(got/total*100)}%`; }
-  const blob=new Uint8Array(got); let o=0; for(const c of chunks){ blob.set(c,o); o+=c.length; }
-  await idbPut(key, blob.buffer); return blob.buffer;
+function draw(bs){
+  const v=Math.max(0,Math.min(1,(bs[32]||0)*8));
+  $("mouth").setAttribute("d",`M70 130 Q100 ${130+v*26} 130 130`);
 }
-
-function probeEnv(){
-  log("crossOriginIsolated: "+(self.crossOriginIsolated?"true ✓":"false ✗"));
-  log("hardwareConcurrency: "+(navigator.hardwareConcurrency||"?")+" / wasm.numThreads="+ort.env.wasm.numThreads);
-  log("WebGPU: "+("gpu" in navigator?"navigator.gpu 있음":"navigator.gpu 없음"));
-}
-
-async function initModel(){
-  if(session){ return true; } // reuse — never recreate (OOM on iOS)
-  const t0=performance.now(); probeEnv();
-  for(const c of CANDIDATES){
-    try{
-      $("load").textContent=`시도 ${c.label}`; $("load").className="pill run";
-      const buf=await getModelBuffer(c.model);
-      $("load").textContent=`초기화 ${c.label}…`;
-      let s=null;
-      try{
-        s=await ort.InferenceSession.create(buf,{executionProviders:[c.ep],graphOptimizationLevel:"all"});
-      }catch(e){ log(`✗ ${c.label} 생성: ${e.message}`); if(s&&s.release) await s.release(); continue; }
-      // WASM warmup: lazy-compile kernels + JIT, so first real run is fast
-      const wa=new ort.Tensor("float32", new Float32Array(WIN*SR), [1, WIN*SR]);
-      const we=new ort.Tensor("int32", new Int32Array([1]), [1]);
-      const wt=new ort.Tensor("int32", new Int32Array([TS_OUT]), [1]);
-      for(let k=0;k<5;k++){ await s.run({audio:wa, emo_id:we, time_steps:wt}); }
-      session=s;
-      const dt=(performance.now()-t0)/1000;
-      $("ep").textContent="EP: "+c.label.toUpperCase(); $("ep").className="pill ok";
-      $("load").textContent=`ready (${dt.toFixed(1)}s)`; $("load").className="pill ok";
-      log(`✅ ${c.label} 로드 (${dt.toFixed(1)}s) + warmup`); return true;
-    }catch(e){ log(`✗ ${c.label}: ${e.message}`); session=null; }
-  }
-  $("load").textContent="model: FAIL"; $("load").className="pill warn"; return false;
-}
-
 const latHist=[];
 function record(dt){
   latHist.push(dt); if(latHist.length>400) latHist.shift();
   const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
   $("lat").textContent=mean.toFixed(0);
   $("latbar").style.width=Math.min(100, mean/(HOP*1000)*100)+"%";
-  const ok=mean<HOP*1000;
-  $("rt").textContent=ok?"OK ✓":"LAG ✗"; $("rt").style.color=ok?"#7ff0a8":"#ff9bb0";
-}
-function draw(bs){
-  const v=Math.max(0,Math.min(1,(bs[32]||0)*8));
-  $("mouth").setAttribute("d",`M70 130 Q100 ${130+v*26} 130 130`);
+  const ok=mean<HOP*1000; $("rt").textContent=ok?"OK ✓":"LAG ✗"; $("rt").style.color=ok?"#7ff0a8":"#ff9bb0";
 }
 
-// ---- TTS streaming: decode audio, play + infer in lockstep ----
+// ---- IndexedDB ----
+function openDB(){ return new Promise((res,rej)=>{ const r=indexedDB.open(DB_NAME,DB_VER); r.onupgradeneeded=()=>r.result.createObjectStore(STORE); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+async function idbGet(k){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readonly"); const q=tx.objectStore(STORE).get(k); q.onsuccess=()=>res(q.result||null); q.onerror=()=>rej(q.error); }); }
+async function idbPut(k,buf){ try{ const db=await openDB(); await new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readwrite"); tx.objectStore(STORE).put(buf,k); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); }catch(e){} }
+async function getModelBuffer(){
+  const key=MODEL_URL.split("/").pop();
+  if(modelBufCache) return modelBufCache;
+  let cached=await idbGet(key);
+  if(cached){ log("📦 캐시 히트: "+key); }
+  else{
+    log("⬇️ 다운로드: "+key);
+    const resp=await fetch(MODEL_URL); const total=+resp.headers.get("content-length")||0;
+    const reader=resp.body.getReader(); const chunks=[]; let got=0;
+    while(true){ const {done,value}=await reader.read(); if(done) break; chunks.push(value); got+=value.length; if(total) $("load").textContent=`다운로드 ${Math.floor(got/total*100)}%`; }
+    const blob=new Uint8Array(got); let o=0; for(const c of chunks){ blob.set(c,o); o+=c.length; }
+    cached=blob.buffer; await idbPut(key,cached);
+  }
+  modelBufCache=cached; return cached;
+}
 async function loadAudio(url){
   const ac=getAudioCtx();
   const buf=await (await fetch(url)).arrayBuffer();
@@ -163,76 +118,70 @@ async function loadAudio(url){
   const ch=dec.getChannelData(0); const fromSR=dec.sampleRate;
   const n=Math.floor(ch.length*SR/fromSR); const idx=new Float32Array(n);
   for(let i=0;i<n;i++){ const p=i*fromSR/SR; const i0=Math.floor(p),i1=Math.min(i0+1,ch.length-1); idx[i]=ch[i0]+(p-i0)*(ch[i1]-ch[i0]); }
-  return {idx, dec};
+  return {idx,dec};
 }
 function stopPlay(){
   stopFlag=true; playing=false;
   try{ if(curSrc){ curSrc.onended=null; curSrc.stop(); } }catch(e){}
   curSrc=null;
+  if(worker){ worker.terminate(); worker=null; }
+  log("⏹ 정지");
 }
-async function playAndSync(){
-  if(!session){ log("모델 준비 안 됨"); return; }
-  if(playing){ stopPlay(); await new Promise(r=>setTimeout(r,50)); }
+async function play(){
+  if(playing){ stopPlay(); await new Promise(r=>setTimeout(r,80)); }
   stopFlag=false; playing=true;
   $("hop").textContent=Math.round(HOP*1000);
-  const url=$("tts").value;
-  const ac=getAudioCtx();
-  const {idx, dec}=await loadAudio(url);
-  const src=ac.createBufferSource(); src.buffer=dec; src.connect(ac.destination); curSrc=src;
-  const winN=Math.floor(WIN*SR), hopN=Math.floor(HOP*SR);
-  const total=Math.max(1, Math.floor((idx.length-winN)/hopN));
-  const emo=new ort.Tensor("int32",new Int32Array([1]),[1]);
-  const ts=new ort.Tensor("int32",new Int32Array([TS_OUT]),[1]);
-  let nextPlay=ac.currentTime+0.05; src.start(nextPlay);
-  let i=0, bufCount=0, behind=0;
-  src.onended=()=>{ if(!stopFlag){ playing=false; log("🔚 재생 종료"); } };
-  const inferLoop=async()=>{
-    while(i<total && !stopFlag){
-      const s=i*hopN, chunk=idx.subarray(s,s+winN);
-      const aT=new ort.Tensor("float32",chunk,[1,chunk.length]);
-      const t0=performance.now();
-      try{
-        const out=await session.run({audio:aT,emo_id:emo,time_steps:ts});
-        const dt=performance.now()-t0;
-        draw(out[Object.keys(out)[0]].data.slice(-FRAME));
-        record(dt);
-        if(dt>HOP*1000) behind++;
-      }catch(e){ log("💥 추론 에러 @ "+i+": "+e.message); stopPlay(); break; }
-      i++; bufCount++;
-      $("buf").textContent=bufCount;
-      // throttle: each chunk starts exactly HOP apart, synced to audio clock
-      const targetMs = nextPlay*1000 + i*HOP*1000;
-      const nowMs = ac.currentTime*1000;
-      const wait = targetMs - nowMs;
-      if(wait>0) await new Promise(r=>setTimeout(r, wait));
-    }
-    if(!stopFlag){
-      const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
-      const sorted=[...latHist].sort((a,b)=>a-b); const p95=sorted[Math.floor(sorted.length*0.95)];
-      $("avg").textContent=mean.toFixed(0); $("p95").textContent=p95.toFixed(0);
-      log(`✅ 완료 평균 ${mean.toFixed(1)}ms / p95 ${p95.toFixed(1)}ms / 밀림 ${behind}청크`);
-      log(mean<HOP*1000?"→ 실시간 충족":"→ 실시간 미충족 (추론이 홉보다 느림)");
-    }
-    playing=false;
-  };
-  inferLoop();
+  $("ep").textContent="EP: WASM·INT8"; $("ep").className="pill ok";
+  try{
+    const buf=await getModelBuffer();
+    const url=$("tts").value||"./test_voice.wav";
+    const {idx,dec}=await loadAudio(url);
+    const ac=getAudioCtx();
+    const src=ac.createBufferSource(); src.buffer=dec; src.connect(ac.destination); curSrc=src;
+    const winN=Math.floor(WIN*SR), hopN=Math.floor(HOP*SR);
+    const total=Math.max(1, Math.floor((idx.length-winN)/hopN));
+    worker=new Worker("./infer.worker.js");
+    let ready=false;
+    worker.onmessage=(e)=>{
+      const m=e.data;
+      if(m.type==="ready"){ ready=true; log("✅ 워커 준비 + warmup"); src.start(ac.currentTime+0.05); }
+      else if(m.type==="bs"){ draw(m.bs); record(m.dt); }
+      else if(m.type==="error"){ log("💥 워커 에러: "+m.message); stopPlay(); }
+    };
+    worker.postMessage({ type:"init", buf:buf.slice(0), threads:Math.min(4,navigator.hardwareConcurrency||4) }, [buf.slice(0)]);
+    let i=0, bufCount=0;
+    const feed=async ()=>{
+      while(i<total && !stopFlag && ready){
+        const s=i*hopN, chunk=idx.subarray(s,s+winN);
+        worker.postMessage({ type:"infer", chunk:chunk.slice(0), dt:performance.now() });
+        i++; bufCount++; $("buf").textContent=bufCount;
+        const targetMs=(ac.currentTime+0.05)*1000 + i*HOP*1000;
+        const wait=targetMs-ac.currentTime*1000;
+        if(wait>0) await new Promise(r=>setTimeout(r,wait));
+      }
+      if(!stopFlag && i>=total){
+        const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
+        const sorted=[...latHist].sort((a,b)=>a-b); const p95=sorted[Math.floor(sorted.length*0.95)];
+        $("avg").textContent=mean.toFixed(0); $("p95").textContent=p95.toFixed(0);
+        log(`✅ 완료 평균 ${mean.toFixed(1)}ms / p95 ${p95.toFixed(1)}ms`);
+        log(mean<HOP*1000?"→ 실시간 충족":"→ 실시간 미충족");
+        playing=false;
+      }
+    };
+    src.onended=()=>{ if(!stopFlag){ playing=false; log("🔚 재생 종료"); } };
+    feed();
+  }catch(e){ log("💥 play 에러: "+e.message); stopPlay(); }
 }
-$("play").onclick=()=>playAndSync();
-$("stop") && ($("stop").onclick=()=>{ stopPlay(); log("정지"); });
-$("stop").onclick=()=>{ stopFlag=true; log("정지"); };
+$("play").onclick=()=>play();
+$("stop").onclick=()=>stopPlay();
 
-// populate TTS list from directory scan (assume test_voice*.wav + tts_*.wav)
 async function populateTTS(){
-  const files=["test_voice.wav","tts_hello.wav","tts_korean.wav","tts_demo.wav"];
+  const files=["test_voice.wav","tts_hello.wav","tts_korean.wav"];
   const sel=$("tts");
-  for(const f of files){
-    const r=await fetch(f,{method:"HEAD"});
-    if(r.ok){ const o=document.createElement("option"); o.value=f; o.textContent=f; sel.appendChild(o); }
-  }
-  if(!sel.options.length){ const o=document.createElement("option"); o.value="test_voice.wav"; o.textContent="test_voice.wav"; sel.appendChild(o); }
+  for(const f of files){ const r=await fetch(f,{method:"HEAD"}); if(r.ok){ const o=document.createElement("option"); o.value=f; o.textContent=f; sel.appendChild(o); } }
 }
-initModel().then(ok=>{ if(!ok) log("모델 실패"); });
 populateTTS();
+getModelBuffer().then(()=>{ $("load").textContent="model: 캐시됨"; $("load").className="pill ok"; }).catch(e=>{ $("load").textContent="model: ERR"; });
 </script>
 </body>
 </html>

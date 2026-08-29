@@ -50,103 +50,73 @@ import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/o
 
 const SR=16000, WIN=0.05, HOP=0.05, TS_OUT=50, FRAME=51;
 const DB_NAME="a2f-models", DB_VER=1, STORE="blobs";
-const CANDIDATES=[
-  { ep:"wasm", model:"./models/unitalker_v0.4.0_base.int8.onnx", label:"WASM·INT8" },
-  { ep:"wasm", model:"./models/unitalker_v0.4.0_base.fp32.onnx", label:"WASM·FP32" },
-];
-const $=id=>document.getElementById(id);
-const log=m=>{ const el=$("log"); el.textContent+=m+"\n"; el.scrollTop=el.scrollHeight; };
-ort.env.wasm.wasmPaths="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/";
-ort.env.wasm.numThreads=Math.min(4, navigator.hardwareConcurrency||4);
+const MODEL_URL="./models/unitalker_v0.4.0_base.int8.onnx";
+const $ = id=>document.getElementById(id);
+const log = m=>{ const el=$("log"); el.textContent+=m+"\n"; el.scrollTop=el.scrollHeight; };
 
-let session=null, engine=null, scene=null, mouthInner=null, stopFlag=false, audioCtx=null, curSrc=null, playing=false;
+let engine=null, scene=null, mouthInner=null;
+let audioCtx=null, curSrc=null, worker=null, stopFlag=false, playing=false;
+let modelBufCache=null; // IndexedDB ArrayBuffer kept for reuse
 
-// single AudioContext reused across plays (iOS Safari: many contexts → silent + throttled)
 function getAudioCtx(){
-  if(!audioCtx){ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+  if(!audioCtx){ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }
   if(audioCtx.state==="suspended"){ audioCtx.resume(); }
   return audioCtx;
 }
 
-// ---- Babylon scene: head + separate mouth meshes (no morph collapse) ----
+// ---- Babylon scene ----
 function buildScene(){
   const canvas=$("canvas");
-  engine=new BABYLON.Engine(canvas, true, {preserveDrawingBuffer:true, stencil:true});
+  engine=new BABYLON.Engine(canvas,true,{preserveDrawingBuffer:true,stencil:true});
   scene=new BABYLON.Scene(engine);
   scene.clearColor=new BABYLON.Color4(0.07,0.08,0.10,1);
   const cam=new BABYLON.ArcRotateCamera("cam", Math.PI/2, Math.PI/2, 4.2, BABYLON.Vector3.Zero(), scene);
   cam.attachControl(canvas,true); cam.lowerRadiusLimit=2.5; cam.upperRadiusLimit=8;
   new BABYLON.HemisphericLight("l", new BABYLON.Vector3(0,1,0), scene);
-  // head
   const head=BABYLON.MeshBuilder.CreateSphere("head",{diameter:2,segments:32},scene);
   const hm=new BABYLON.StandardMaterial("hm",scene); hm.diffuseColor=new BABYLON.Color3(0.55,0.6,0.78); hm.specularColor=new BABYLON.Color3(0.1,0.1,0.1);
   head.material=hm;
-  // eyes (in front of face)
   for(const sx of [-0.35,0.35]){
     const e=BABYLON.MeshBuilder.CreateSphere("eye"+sx,{diameter:0.28,segments:16},scene);
     e.position.set(sx,0.25,1.0);
     const em=new BABYLON.StandardMaterial("em",scene); em.diffuseColor=new BABYLON.Color3(0.95,0.97,1); em.emissiveColor=new BABYLON.Color3(0.2,0.25,0.3);
     e.material=em;
   }
-  // mouth: outer lip (flat ellipse) + inner (dark, scales open) — pushed in FRONT of head surface
-  const lip=BABYLON.MeshBuilder.CreateTorus("lip",{diameter:0.55, thickness:0.06, tessellation:32},scene);
+  const lip=BABYLON.MeshBuilder.CreateTorus("lip",{diameter:0.55,thickness:0.06,tessellation:32},scene);
   lip.position.set(0,-0.35,1.02); lip.rotation.x=Math.PI/2;
-  const lm=new BABYLON.StandardMaterial("lm",scene); lm.diffuseColor=new BABYLON.Color3(0.8,0.45,0.5);
-  lip.material=lm;
+  const lm=new BABYLON.StandardMaterial("lm",scene); lm.diffuseColor=new BABYLON.Color3(0.8,0.45,0.5); lip.material=lm;
   mouthInner=BABYLON.MeshBuilder.CreatePlane("mouthIn",{size:0.4},scene);
   mouthInner.position.set(0,-0.35,1.025);
   const im=new BABYLON.StandardMaterial("im",scene); im.diffuseColor=new BABYLON.Color3(0.25,0.05,0.1); im.backFaceCulling=false; im.emissiveColor=new BABYLON.Color3(0.1,0.02,0.04);
-  mouthInner.material=im;
-  mouthInner.scaling.y=0.05; // closed by default
+  mouthInner.material=im; mouthInner.scaling.y=0.05;
   engine.runRenderLoop(()=>scene.render());
-  log("🧊 Babylon 씬 준비 — 메시: "+scene.meshes.length+"개 (헤드+눈2+입술+입안)");
+  log("🧊 Babylon 씬 준비 — 메시: "+scene.meshes.length);
 }
-
-// ---- model cache ----
-function openDB(){ return new Promise((res,rej)=>{ const r=indexedDB.open(DB_NAME,DB_VER); r.onupgradeneeded=()=>r.result.createObjectStore(STORE); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
-async function idbGet(k){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readonly"); const q=tx.objectStore(STORE).get(k); q.onsuccess=()=>res(q.result||null); q.onerror=()=>rej(q.error); }); }
-async function idbPut(k,buf){ try{ const db=await openDB(); await new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readwrite"); tx.objectStore(STORE).put(buf,k); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); }catch(e){ log("⚠️ 저장 실패: "+e.message); } }
-async function getModelBuffer(url){
-  const key=url.split("/").pop(); const cached=await idbGet(key);
-  if(cached){ log("📦 캐시 히트: "+key); return cached; }
-  log("⬇️ 다운로드: "+key);
-  const resp=await fetch(url); const total=+resp.headers.get("content-length")||0;
-  const reader=resp.body.getReader(); const chunks=[]; let got=0;
-  while(true){ const {done,value}=await reader.read(); if(done) break; chunks.push(value); got+=value.length; if(total) $("load").textContent=`다운로드 ${Math.floor(got/total*100)}%`; }
-  const blob=new Uint8Array(got); let o=0; for(const c of chunks){ blob.set(c,o); o+=c.length; }
-  await idbPut(key,blob.buffer); return blob.buffer;
-}
-async function initModel(){
-  if(session){ return true; } // already loaded — reuse, never recreate (OOM on iOS)
-  const t0=performance.now();
-  for(const c of CANDIDATES){
-    try{
-      $("load").textContent=`시도 ${c.label}`;
-      const buf=await getModelBuffer(c.model);
-      let s=null;
-      try{
-        s=await ort.InferenceSession.create(buf,{executionProviders:[c.ep],graphOptimizationLevel:"all"});
-      }catch(e){ log(`✗ ${c.label} 생성: ${e.message}`); if(s&&s.release) await s.release(); continue; }
-      // WASM warmup: lazy-compile kernels + JIT, so first real run is fast
-      const wa=new ort.Tensor("float32", new Float32Array(WIN*SR), [1, WIN*SR]);
-      const we=new ort.Tensor("int32", new Int32Array([1]), [1]);
-      const wt=new ort.Tensor("int32", new Int32Array([TS_OUT]), [1]);
-      for(let k=0;k<5;k++){ await s.run({audio:wa, emo_id:we, time_steps:wt}); }
-      session=s;
-      const dt=(performance.now()-t0)/1000;
-      $("ep").textContent="EP: "+c.label.toUpperCase(); $("ep").className="pill ok";
-      $("load").textContent=`ready (${dt.toFixed(1)}s)`; $("load").className="pill ok";
-      log(`✅ ${c.label} 로드 (${dt.toFixed(1)}s) + warmup`); return true;
-    }catch(e){ log(`✗ ${c.label}: ${e.message}`); }
-  }
-  $("load").textContent="FAIL"; return false;
-}
-
-// blendshape(51) → mouth. Channel 32 = mouth open (clamped). Full 51ch rig = TODO.
 function applyBlendshape(bs){
   if(!mouthInner) return;
-  const v=Math.max(0, Math.min(1, (bs[32]||0)*8));
-  mouthInner.scaling.y=0.05 + v*1.0; // 0.05 closed → 1.05 open
+  const v=Math.max(0,Math.min(1,(bs[32]||0)*8));
+  mouthInner.scaling.y=0.05 + v*1.0;
+}
+
+// ---- IndexedDB model cache ----
+function openDB(){ return new Promise((res,rej)=>{ const r=indexedDB.open(DB_NAME,DB_VER); r.onupgradeneeded=()=>r.result.createObjectStore(STORE); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+async function idbGet(k){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readonly"); const q=tx.objectStore(STORE).get(k); q.onsuccess=()=>res(q.result||null); q.onerror=()=>rej(q.error); }); }
+async function idbPut(k,buf){ try{ const db=await openDB(); await new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readwrite"); tx.objectStore(STORE).put(buf,k); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); }catch(e){} }
+
+async function getModelBuffer(){
+  const key=MODEL_URL.split("/").pop();
+  if(modelBufCache) return modelBufCache;
+  let cached=await idbGet(key);
+  if(cached){ log("📦 캐시 히트: "+key); }
+  else{
+    log("⬇️ 다운로드: "+key);
+    const resp=await fetch(MODEL_URL); const total=+resp.headers.get("content-length")||0;
+    const reader=resp.body.getReader(); const chunks=[]; let got=0;
+    while(true){ const {done,value}=await reader.read(); if(done) break; chunks.push(value); got+=value.length; if(total) $("load").textContent=`다운로드 ${Math.floor(got/total*100)}%`; }
+    const blob=new Uint8Array(got); let o=0; for(const c of chunks){ blob.set(c,o); o+=c.length; }
+    cached=blob.buffer; await idbPut(key,cached);
+  }
+  modelBufCache=cached; return cached;
 }
 
 const latHist=[];
@@ -165,57 +135,66 @@ async function loadAudio(url){
   for(let i=0;i<n;i++){ const p=i*fromSR/SR; const i0=Math.floor(p),i1=Math.min(i0+1,ch.length-1); idx[i]=ch[i0]+(p-i0)*(ch[i1]-ch[i0]); }
   return {idx,dec};
 }
+
 function stopPlay(){
   stopFlag=true; playing=false;
   try{ if(curSrc){ curSrc.onended=null; curSrc.stop(); } }catch(e){}
   curSrc=null;
+  if(worker){ worker.terminate(); worker=null; }  // hard kill → no dangling promises
+  log("⏹ 정지");
 }
+
 async function play(){
-  if(!session){ log("모델 준비 안 됨"); return; }
   if(!mouthInner){ log("씬 미준비"); return; }
-  if(playing){ stopPlay(); await new Promise(r=>setTimeout(r,50)); }
+  if(playing){ stopPlay(); await new Promise(r=>setTimeout(r,80)); }
   stopFlag=false; playing=true;
   $("hop").textContent=Math.round(HOP*1000);
-  const ac=getAudioCtx();
-  const {idx,dec}=await loadAudio("./test_voice.wav");
-  const src=ac.createBufferSource(); src.buffer=dec; src.connect(ac.destination); curSrc=src;
-  const winN=Math.floor(WIN*SR), hopN=Math.floor(HOP*SR);
-  const total=Math.max(1, Math.floor((idx.length-winN)/hopN));
-  const emo=new ort.Tensor("int32",new Int32Array([1]),[1]);
-  const ts=new ort.Tensor("int32",new Int32Array([TS_OUT]),[1]);
-  let i=0;
-  src.onended=()=>{ if(!stopFlag){ playing=false; log("🔚 재생 종료"); } };
-  const inferLoop=async()=>{
-    const t0=ac.currentTime+0.05; src.start(t0);
-    while(i<total && !stopFlag){
-      const s=i*hopN, chunk=idx.subarray(s,s+winN);
-      const aT=new ort.Tensor("float32",chunk,[1,chunk.length]);
-      const ti=performance.now();
-      try{
-        const out=await session.run({audio:aT,emo_id:emo,time_steps:ts});
-        const dt=performance.now()-ti;
-        applyBlendshape(out[Object.keys(out)[0]].data.slice(-FRAME));
-        record(dt);
-      }catch(e){ log("💥 추론 에러 @ "+i+": "+e.message); stopPlay(); break; }
-      i++;
-      const targetMs=t0*1000 + i*HOP*1000;
-      const wait=targetMs - ac.currentTime*1000;
-      if(wait>0) await new Promise(r=>setTimeout(r, wait));
-    }
-    if(!stopFlag){
-      const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
-      const sorted=[...latHist].sort((a,b)=>a-b); const p95=sorted[Math.floor(sorted.length*0.95)];
-      log(`✅ 평균 ${mean.toFixed(1)}ms / p95 ${p95.toFixed(1)}ms → ${mean<HOP*1000?"실시간 OK":"LAG"}`);
-    }
-    playing=false;
-  };
-  inferLoop();
+  $("ep").textContent="EP: WASM·INT8"; $("ep").className="pill ok";
+  try{
+    const buf=await getModelBuffer();
+    const {idx,dec}=await loadAudio("./test_voice.wav");
+    const ac=getAudioCtx();
+    const src=ac.createBufferSource(); src.buffer=dec; src.connect(ac.destination); curSrc=src;
+    const winN=Math.floor(WIN*SR), hopN=Math.floor(HOP*SR);
+    const total=Math.max(1, Math.floor((idx.length-winN)/hopN));
+    // worker
+    worker=new Worker("./infer.worker.js");
+    let ready=false;
+    worker.onmessage=async (e)=>{
+      const m=e.data;
+      if(m.type==="ready"){ ready=true; log("✅ 워커 준비 + warmup"); src.start(ac.currentTime+0.05); }
+      else if(m.type==="bs"){ applyBlendshape(m.bs); record(m.dt); }
+      else if(m.type==="error"){ log("💥 워커 에러: "+m.message); stopPlay(); }
+    };
+    worker.postMessage({ type:"init", buf:buf.slice(0), threads:Math.min(4,navigator.hardwareConcurrency||4) }, [buf.slice(0)]);
+    // playback loop on main thread, feeding worker
+    let i=0;
+    const feed=async ()=>{
+      while(i<total && !stopFlag && ready){
+        const s=i*hopN, chunk=idx.subarray(s,s+winN);
+        worker.postMessage({ type:"infer", chunk:chunk.slice(0), dt:performance.now() });
+        i++;
+        const targetMs=(ac.currentTime+0.05)*1000 + i*HOP*1000;
+        const wait=targetMs-ac.currentTime*1000;
+        if(wait>0) await new Promise(r=>setTimeout(r,wait));
+        if(i% Math.ceil(total/10)===0) log(`… ${Math.floor(i/total*100)}%`);
+      }
+      if(!stopFlag && i>=total){
+        const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
+        const sorted=[...latHist].sort((a,b)=>a-b); const p95=sorted[Math.floor(sorted.length*0.95)];
+        log(`✅ 평균 ${mean.toFixed(1)}ms / p95 ${p95.toFixed(1)}ms → ${mean<HOP*1000?"실시간 OK":"LAG"}`);
+        playing=false;
+      }
+    };
+    src.onended=()=>{ if(!stopFlag){ playing=false; log("🔚 재생 종료"); } };
+    feed();
+  }catch(e){ log("💥 play 에러: "+e.message); stopPlay(); }
 }
 $("play").onclick=()=>play();
-$("stop") && ($("stop").onclick=()=>{ stopPlay(); log("정지"); });
 
 buildScene();
-initModel().then(ok=>{ if(!ok) log("모델 실패"); });
+// preload model into cache on load
+getModelBuffer().then(()=>{ $("load").textContent="model: 캐시됨"; $("load").className="pill ok"; }).catch(e=>{ $("load").textContent="model: ERR"; });
 </script>
 </body>
 </html>
