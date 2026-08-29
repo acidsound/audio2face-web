@@ -92,10 +92,10 @@ function getAudioCtx(){
 }
 function applyBlendshape(bs){
   if(!targetMgr) return;
-  const LERP=0.4;
+  // slower lerp → smooth blink, no flicker
+  const LERP=0.15;
   const targetInf={};
   for(const k in MAP){
-    // UniTalker output is already ~0..1 normalized; clamp, no *8
     const v=Math.max(0,Math.min(1,(bs[+k]||0)));
     const ti=targetNames.indexOf(MAP[k]);
     if(ti>=0) targetInf[ti]=Math.max(targetInf[ti]||0, v);
@@ -269,9 +269,14 @@ function buildScene(){
       const cy=minY+(maxY-minY)*0.85; // aim at face (upper)
       cam.setTarget(new BABYLON.Vector3(cx,cy,cz));
       const h=maxY-minY;
-      cam.radius=Math.max(0.8, h*0.35);    // face close-up
-      cam.lowerRadiusLimit=Math.max(0.4, h*0.18);  // no clip-through head
-      cam.upperRadiusLimit=20;
+      const headW = Math.max(maxX-minX, maxZ-minZ); // approximate head width
+      // safe distance: never enter mesh; close-up but not clip-through
+      const faceRadius = headW * 1.5;
+      const safeMin = headW * 1.05; // never closer than mesh edge
+      cam.radius = faceRadius;
+      cam.lowerRadiusLimit = safeMin;
+      cam.upperRadiusLimit = Math.max(8, h * 1.5);
+      log("   카메라: headW="+headW.toFixed(2)+" radius="+cam.radius.toFixed(2)+" min="+safeMin.toFixed(2));
       // idle: stop all default animations (no greeting/spin)
       sc.animationGroups.forEach(g=>g.stop());
       log("   idle 모드 (기본 애니매이션 정지)");
