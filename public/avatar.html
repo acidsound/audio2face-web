@@ -257,14 +257,12 @@ function buildScene(){
   cam.useFramingBehavior=false;
   // custom panning: enable when shift is held
   let _shiftDown=false;
-  // rotation sensitivity control (0 = freeze rotation, default ~1000)
   const _ptr=cam.inputs.attached.pointers;
   window.addEventListener("keydown",(e)=>{ if(e.key==="Shift"){
     _shiftDown=true;
-    // freeze rotation, enable panning
     _ptr.angularSensibilityX=0;
     _ptr.angularSensibilityY=0;
-    cam.panningSensibility=1500;
+    cam.panningSensibility=600;  // smaller value → slower pan, no NaN
   } });
   window.addEventListener("keyup",(e)=>{ if(e.key==="Shift"){
     _shiftDown=false;
@@ -272,7 +270,6 @@ function buildScene(){
     _ptr.angularSensibilityY=1000;
     cam.panningSensibility=0;
   } });
-  // also catch shift lost while pointer held
   window.addEventListener("blur",()=>{
     if(_shiftDown){
       _shiftDown=false; _ptr.angularSensibilityX=1000; _ptr.angularSensibilityY=1000; cam.panningSensibility=0;
@@ -363,10 +360,24 @@ function buildScene(){
       fillLight.position=new BABYLON.Vector3(cx+1.5, headY+0.2, cz+1.0);  // opposite
       rimLight.position=new BABYLON.Vector3(cx, headY+0.5, cz-1.6);  // from behind
       // camera direction: from -Z to +Z, alpha=-π/2 looks at +Z. Keep default.
-      // HARD clamp every frame
+      // HARD clamp every frame: radius + target (prevent NaN/exit)
       const _minR = safeMin;
+      const _txL = minX - (maxX-minX)*0.5, _txR = maxX + (maxX-minX)*0.5;
+      const _tyL = minY - (maxY-minY)*0.3, _tyR = maxY + (maxY-minY)*0.3;
+      const _tzL = minZ - (maxZ-minZ)*0.5, _tzR = maxZ + (maxZ-minZ)*0.5;
+      const _cx0=cx, _cz0=cz, _hY0=headY;
       sc.onBeforeRenderObservable.add(()=>{
+        if(!isFinite(cam.radius)||isNaN(cam.radius)) cam.radius=_minR;
         if(cam.radius < _minR) cam.radius = _minR;
+        if(cam.radius > 20) cam.radius = 20;
+        const t=cam.target;
+        if(!isFinite(t.x)||isNaN(t.x)) cam.setTarget(new BABYLON.Vector3(_cx0,_hY0,_cz0));
+        if(t.x<_txL) t.x=_txL; if(t.x>_txR) t.x=_txR;
+        if(t.y<_tyL) t.y=_tyL; if(t.y>_tyR) t.y=_tyR;
+        if(t.z<_tzL) t.z=_tzL; if(t.z>_tzR) t.z=_tzR;
+        // NaN check on alpha/beta (rotation can also NaN out)
+        if(!isFinite(cam.alpha)) cam.alpha=Math.PI/2;
+        if(!isFinite(cam.beta)) cam.beta=Math.PI/2.5;
       });
       // WHITE FOAM-BOARD background: large plane behind subject
       // camera is at alpha=π/2 (looking from -Z), so place board at +Z behind subject
