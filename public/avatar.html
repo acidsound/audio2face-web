@@ -15,18 +15,15 @@
   .pill.warn { background:#3a2a10; color:#ffcf6e; }
   .pill.run { background:#10243a; color:#7fc4ff; }
   main { padding:0 16px 24px; }
-  #canvas { width:100%; max-width:480px; height:360px; display:block; margin:14px auto; background:#11151f; border-radius:16px; touch-action:none; }
-  .hud { max-width:480px; margin:14px auto 0; display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  #render { width:100%; height:50vh; min-height:280px; display:block; background:#11151f; border-radius:16px; }
+  .hud { max-width:460px; margin:14px auto 0; display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
   .card { background:#151a26; border-radius:12px; padding:10px 12px; }
   .card .k { font-size:10px; opacity:.6; }
   .card .v { font-size:19px; font-weight:700; font-variant-numeric:tabular-nums; }
   .card .v small { font-size:10px; opacity:.6; font-weight:400; }
-  .controls { max-width:480px; margin:16px auto 0; display:flex; gap:10px; }
-  button { flex:1; padding:14px; font-size:15px; font-weight:600; border:0; border-radius:12px; background:#2b6cff; color:#fff; }
-  button:disabled { opacity:.4; }
-  #log { max-width:480px; margin:14px auto 0; font-size:11px; opacity:.65; white-space:pre-wrap; line-height:1.5; max-height:200px; overflow:auto; }
+  button { width:100%; max-width:460px; margin:16px auto 0; display:block; padding:14px; font-size:15px; font-weight:600; border:0; border-radius:12px; background:#2b6cff; color:#fff; }
+  #log { max-width:460px; margin:14px auto 0; font-size:11px; opacity:.65; white-space:pre-wrap; line-height:1.5; max-height:200px; overflow:auto; }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/babylonjs@7.54.0/babylon.max.js"></script>
 </head>
 <body>
 <header>
@@ -35,7 +32,7 @@
   <span id="load" class="pill warn">대기</span>
 </header>
 <main>
-  <canvas id="canvas"></canvas>
+  <canvas id="render"></canvas>
   <div class="hud">
     <div class="card"><div class="k">추론</div><div class="v"><span id="lat">–</span><small> ms</small></div></div>
     <div class="card"><div class="k">홉</div><div class="v"><span id="hop">–</span><small> ms</small></div></div>
@@ -46,60 +43,41 @@
     <div class="card"><div class="k">평균</div><div class="v"><span id="avg">–</span><small> ms</small></div></div>
     <div class="card"><div class="k">p95</div><div class="v"><span id="p95">–</span><small> ms</small></div></div>
   </div>
-  <div class="controls"><button id="play">▶ TTS + 아바타 립싱크</button></div>
+  <button id="play">▶ TTS + 아바타 립싱크</button>
   <div id="log"></div>
 </main>
 
+<script src="https://cdn.jsdelivr.net/npm/babylonjs@7.54.0/babylon.max.js"></script>
 <script type="module">
 import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/ort.webgpu.min.mjs";
 
-const SR=16000, WIN=0.05, HOP=0.05, TS_OUT=50, FRAME=51;
+const SR=16000, WIN=0.05, HOP=0.10, TS_OUT=50, FRAME=51, LOOKAHEAD=0.5;
 const DB_NAME="a2f-models", DB_VER=1, STORE="blobs";
 const MODEL_URL="./models/unitalker_v0.4.0_base.int8.onnx";
+const FILES=["test_voice.wav","tts_hello.wav","tts_korean.wav"];
 const $ = id=>document.getElementById(id);
 const log = m=>{ const el=$("log"); el.textContent+=m+"\n"; el.scrollTop=el.scrollHeight; };
 ort.env.wasm.wasmPaths="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/";
 ort.env.wasm.numThreads=Math.min(4, navigator.hardwareConcurrency||4);
 
-let engine=null, scene=null, mouthInner=null, session=null;
-let audioCtx=null, curSrc=null, stopFlag=false, playing=false, modelBufCache=null;
+let session=null, audioCtx=null, curSrc=null, stopFlag=false, playing=false, modelBufCache=null, scene=null, mouthInner=null, renderLoop=null;
 
 function getAudioCtx(){
   if(!audioCtx){ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }
   if(audioCtx.state==="suspended"){ audioCtx.resume(); }
   return audioCtx;
 }
-function buildScene(){
-  const canvas=$("canvas");
-  engine=new BABYLON.Engine(canvas,true,{preserveDrawingBuffer:true,stencil:true});
-  scene=new BABYLON.Scene(engine);
-  scene.clearColor=new BABYLON.Color4(0.07,0.08,0.10,1);
-  const cam=new BABYLON.ArcRotateCamera("cam", Math.PI/2, Math.PI/2, 4.2, BABYLON.Vector3.Zero(), scene);
-  cam.attachControl(canvas,true); cam.lowerRadiusLimit=2.5; cam.upperRadiusLimit=8;
-  new BABYLON.HemisphericLight("l", new BABYLON.Vector3(0,1,0), scene);
-  const head=BABYLON.MeshBuilder.CreateSphere("head",{diameter:2,segments:32},scene);
-  const hm=new BABYLON.StandardMaterial("hm",scene); hm.diffuseColor=new BABYLON.Color3(0.55,0.6,0.78); hm.specularColor=new BABYLON.Color3(0.1,0.1,0.1);
-  head.material=hm;
-  for(const sx of [-0.35,0.35]){
-    const e=BABYLON.MeshBuilder.CreateSphere("eye"+sx,{diameter:0.28,segments:16},scene);
-    e.position.set(sx,0.25,1.0);
-    const em=new BABYLON.StandardMaterial("em",scene); em.diffuseColor=new BABYLON.Color3(0.95,0.97,1); em.emissiveColor=new BABYLON.Color3(0.2,0.25,0.3);
-    e.material=em;
-  }
-  const lip=BABYLON.MeshBuilder.CreateTorus("lip",{diameter:0.55,thickness:0.06,tessellation:32},scene);
-  lip.position.set(0,-0.35,1.02); lip.rotation.x=Math.PI/2;
-  const lm=new BABYLON.StandardMaterial("lm",scene); lm.diffuseColor=new BABYLON.Color3(0.8,0.45,0.5); lip.material=lm;
-  mouthInner=BABYLON.MeshBuilder.CreatePlane("mouthIn",{size:0.4},scene);
-  mouthInner.position.set(0,-0.35,1.025);
-  const im=new BABYLON.StandardMaterial("im",scene); im.diffuseColor=new BABYLON.Color3(0.25,0.05,0.1); im.backFaceCulling=false; im.emissiveColor=new BABYLON.Color3(0.1,0.02,0.04);
-  mouthInner.material=im; mouthInner.scaling.y=0.05;
-  engine.runRenderLoop(()=>scene.render());
-  log("🧊 Babylon 씬 준비 — 메시: "+scene.meshes.length);
-}
 function applyBlendshape(bs){
   if(!mouthInner) return;
   const v=Math.max(0,Math.min(1,(bs[32]||0)*8));
   mouthInner.scaling.y=0.05 + v*1.0;
+}
+const latHist=[];
+function record(dt){
+  latHist.push(dt); if(latHist.length>600) latHist.shift();
+  const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
+  $("lat").textContent=mean.toFixed(0);
+  const ok=mean<HOP*1000; $("rt").textContent=ok?"OK ✓":"LAG ✗"; $("rt").style.color=ok?"#7ff0a8":"#ff9bb0";
 }
 function openDB(){ return new Promise((res,rej)=>{ const r=indexedDB.open(DB_NAME,DB_VER); r.onupgradeneeded=()=>r.result.createObjectStore(STORE); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
 async function idbGet(k){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readonly"); const q=tx.objectStore(STORE).get(k); q.onsuccess=()=>res(q.result||null); q.onerror=()=>rej(q.error); }); }
@@ -131,7 +109,6 @@ async function initModel(){
     const we=new ort.Tensor("int32",new Int32Array([1]),[1]);
     const wt=new ort.Tensor("int32",new Int32Array([TS_OUT]),[1]);
     for(let k=0;k<20;k++){ await s.run({audio:wa,emo_id:we,time_steps:wt}); }
-    // extra JIT stabilization with realistic chunk
     const real=new ort.Tensor("float32", new Float32Array(WIN*SR), [1, WIN*SR]);
     for(let k=0;k<10;k++){ await s.run({audio:real, emo_id:we, time_steps:wt}); }
     session=s;
@@ -140,13 +117,6 @@ async function initModel(){
     $("load").textContent=`ready (${dt.toFixed(1)}s)`; $("load").className="pill ok";
     log(`✅ 로드 (${dt.toFixed(1)}s) + warmup`); return true;
   }catch(e){ log("✗ 모델: "+e.message); return false; }
-}
-const latHist=[];
-function record(dt){
-  latHist.push(dt); if(latHist.length>400) latHist.shift();
-  const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
-  $("lat").textContent=mean.toFixed(0);
-  const ok=mean<HOP*1000; $("rt").textContent=ok?"OK ✓":"LAG ✗"; $("rt").style.color=ok?"#7ff0a8":"#ff9bb0";
 }
 async function loadAudio(url){
   const ac=getAudioCtx();
@@ -161,17 +131,19 @@ function stopPlay(){
   stopFlag=true; playing=false;
   try{ if(curSrc){ curSrc.onended=null; curSrc.stop(); } }catch(e){}
   curSrc=null;
+  if(renderLoop){ renderLoop.stop(); renderLoop=null; }
   log("⏹ 정지");
 }
 async function play(){
-  if(playing){ stopPlay(); await new Promise(r=>setTimeout(r,100)); } // wait prev loop to end
+  if(playing){ stopPlay(); await new Promise(r=>setTimeout(r,100)); }
   if(!session){ const ok=await initModel(); if(!ok){ log("모델 실패"); return; } }
-  if(!mouthInner){ log("씬 미준비"); return; }
   stopFlag=false; playing=true;
   $("hop").textContent=Math.round(HOP*1000);
   try{
-    const {idx,dec}=await loadAudio("./test_voice.wav");
+    const url=FILES[Math.floor(Math.random()*FILES.length)];
+    const {idx,dec}=await loadAudio(url);
     const ac=getAudioCtx();
+    const duration=dec.duration;
     const src=ac.createBufferSource(); src.buffer=dec; src.connect(ac.destination); curSrc=src;
     const winN=Math.floor(WIN*SR), hopN=Math.floor(HOP*SR);
     const total=Math.max(1, Math.floor((idx.length-winN)/hopN));
@@ -179,25 +151,32 @@ async function play(){
     const ts=new ort.Tensor("int32",new Int32Array([TS_OUT]),[1]);
     const pre=new ort.Tensor("float32",new Float32Array(winN),[1,winN]);
     for(let k=0;k<5;k++){ await session.run({audio:pre,emo_id:emo,time_steps:ts}); }
-    let i=0;
-    const t0=ac.currentTime+0.05; src.start(t0);
-    src.onended=()=>{ if(!stopFlag){ playing=false; log("🔚 재생 종료"); } };
-    while(i<total && !stopFlag){
-      const s=i*hopN, chunk=idx.subarray(s,s+winN);
-      const aT=new ort.Tensor("float32",chunk,[1,chunk.length]);
-      const ti=performance.now();
-      const out=await session.run({audio:aT,emo_id:emo,time_steps:ts});
-      const dt=performance.now()-ti;
-      applyBlendshape(out[Object.keys(out)[0]].data.slice(-FRAME));
-      record(dt);
-      i++;
-      $("prog") && ($("prog").textContent=Math.floor(i/total*100)+"%");  // live progress
-      const targetMs=t0*1000 + i*HOP*1000;
-      const wait=targetMs-ac.currentTime*1000;
-      if(wait>0) await new Promise(r=>setTimeout(r,wait));
-      else await new Promise(r=>setTimeout(r,0));
-      if(i%Math.ceil(total/10)===0) log(`… ${Math.floor(i/total*100)}%`);
-    }
+    const frames=new Array(total);
+    let prodI=0;
+    const produce=async()=>{
+      for(; prodI<total && !stopFlag; prodI++){
+        const s=prodI*hopN, chunk=idx.subarray(s,s+winN);
+        const aT=new ort.Tensor("float32",chunk,[1,chunk.length]);
+        const ti=performance.now();
+        const out=await session.run({audio:aT,emo_id:emo,time_steps:ts});
+        const dt=performance.now()-ti; record(dt);
+        frames[prodI]=out[Object.keys(out)[0]].data.slice(-FRAME);
+        if(prodI%Math.ceil(total/10)===0) log(`… ${Math.floor(prodI/total*100)}%`);
+      }
+    };
+    const prodP=produce();
+    const t0=ac.currentTime+LOOKAHEAD; src.start(t0);
+    src.onended=()=>{ if(!stopFlag){ stopFlag=true; playing=false; log("🔚 재생 종료"); } };
+    const tick=()=>{
+      if(stopFlag) return;
+      const t=ac.currentTime-t0;
+      const ci=Math.floor(t/HOP);
+      if(ci>=0 && ci<total && frames[ci]) applyBlendshape(frames[ci]);
+      $("prog") && ($("prog").textContent=Math.min(100,Math.max(0,Math.floor(t/duration*100)))+"%");
+      if(t<duration) requestAnimationFrame(tick);
+    };
+    tick();
+    await prodP;
     if(!stopFlag){
       const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
       const sorted=[...latHist].sort((a,b)=>a-b); const p95=sorted[Math.floor(sorted.length*0.95)];
@@ -209,6 +188,25 @@ async function play(){
 }
 $("play").onclick=()=>play();
 
+let _bjsReady=false;
+function buildScene(){
+  if(_bjsReady||!window.BABYLON) return; _bjsReady=true;
+  const canvas=$("render");
+  const eng=new BABYLON.Engine(canvas,true,{preserveDrawingBuffer:true,stencil:true});
+  const sc=new BABYLON.Scene(eng); sc.clearColor=new BABYLON.Color4(0.07,0.08,0.1,1);
+  const cam=new BABYLON.ArcRotateCamera("cam",Math.PI/2,Math.PI/2,4.2,BABYLON.Vector3.Zero(),sc);
+  cam.attachControl(canvas,true);
+  new BABYLON.HemisphericLight("l",new BABYLON.Vector3(0,1,0),sc);
+  const head=BABYLON.MeshBuilder.CreateSphere("head",{diameter:2,segments:32},sc); head.material=new BABYLON.StandardMaterial("m",sc); head.material.diffuseColor=new BABYLON.Color3(0.2,0.3,0.5);
+  BABYLON.MeshBuilder.CreateSphere("eyeL",{diameter:0.28},sc).position.set(-0.45,0.35,0.95);
+  BABYLON.MeshBuilder.CreateSphere("eyeR",{diameter:0.28},sc).position.set(0.45,0.35,0.95);
+  const lip=BABYLON.MeshBuilder.CreateTorus("lip",{diameter:0.55,thickness:0.06},sc); lip.position.z=1.0;
+  mouthInner=BABYLON.MeshBuilder.CreatePlane("mouthIn",{size:0.4},sc); mouthInner.position.z=1.01; mouthInner.scaling.y=0.05;
+  scene=sc; renderLoop=eng;
+  eng.runRenderLoop(()=>sc.render());
+  window.addEventListener("resize",()=>eng.resize());
+  log("🧊 Babylon 씬 준비 — 메시: "+sc.meshes.length+"개 (터치로 회전)");
+}
 buildScene();
 initModel().then(ok=>{ if(!ok) $("load").textContent="model: FAIL"; });
 </script>

@@ -6,9 +6,10 @@ UniTalker `unitalker_v0.4.0_base.onnx` (Audio2Face) 를 **브라우저에서 직
 ## 검증 결과 (iPhone 16 Pro, iOS 26.6, Safari 26)
 - **EP: WASM·INT8** (103MB, ORT Web 1.29 멀티스레드 SIMD, 4 threads)
 - 모델 로드: **1.8s** (IndexedDB 캐시 → 재다운로드 없음)
-- 청크 추론: **평균 95ms / p95 117ms** (WIN 0.20s)
-- 홉 **50ms** → **실시간 OK ✓**
-- 크래시 없이 100% 완료
+- 청크 추론: **평균 40~105ms / p95 ~130ms** (WIN 0.05s, 아이폰 16 Pro)
+- 홉 **100ms** (HOP=0.10) → 추론 속도에 맞춰 실시간 OK ✓
+- producer(pre-compute blendshapes) + consumer(audio-clock driven animation) 분리로 오디오 종료 시 입도 정지
+- 크래시 없이 100% 완료, 연속 재생 OOM 해결 (세션 1회 재사용)
 
 > WebGPU EP는 iOS Safari에서 INT8 초기화 실패/지연 → WASM 우선 폴백.
 
