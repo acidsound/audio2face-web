@@ -348,7 +348,7 @@ function buildScene(){
       const OUTLINE_COLOR = new BABYLON.Color3(0.04, 0.04, 0.07);
       const gbr = sc.enableGeometryBufferRenderer();
       const _dbgNormal = new URLSearchParams(location.search).get("dbg")==="normal";
-      log("   GeometryBuffer: "+(gbr?"OK":"FAIL")+", normalTex="+(gbr&&gbr.normalTexture?"yes":"NO"));
+      log("   GeometryBuffer: "+(gbr?"OK":"FAIL")+", normalTex(initial)="+(gbr&&gbr.normalTexture?"yes":"NO"));
       if(gbr){
         gbr.enableNormal = true;
         gbr.enableDepth = false;
@@ -405,7 +405,14 @@ function buildScene(){
           1.0, cam, BABYLON.Texture.NEAREST_SAMPLINGMODE, eng);
         if(_dbgNormal) pp.defines = "#define DBG_NORMAL";
         pp.onApply = (effect)=>{
-          effect.setTexture("normalSampler", gbr.normalTexture);
+          // GeometryBufferRenderer may not populate .normalTexture until first render;
+          // pull the live normal render target every frame to be safe.
+          let ntex = gbr.normalTexture;
+          if(!ntex && gbr.getRenderTarget){
+            const rt = gbr.getRenderTarget();
+            if(rt && rt.textures && gbr.normalIndex!==undefined) ntex = rt.textures[gbr.normalIndex];
+          }
+          effect.setTexture("normalSampler", ntex);
           effect.setFloat2("screenSize", eng.getRenderWidth(), eng.getRenderHeight());
           effect.setFloat("outlineWidth", OUTLINE_PX);
           effect.setColor3("outlineColor", OUTLINE_COLOR);
