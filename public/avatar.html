@@ -221,24 +221,24 @@ function buildScene(){
   new BABYLON.HemisphericLight("l",new BABYLON.Vector3(0,1,0),sc);
   scene=sc; renderLoop=eng;
   BABYLON.SceneLoader.ImportMesh("", "", GLB_URL, sc, (meshes)=>{
-    // find mesh with morph targets
+    // pick the mesh with the MOST morph targets (the face mesh with あいうえお)
+    let best=null, bestN=0;
     for(const m of meshes){
       const tm=m.morphTargetManager;
-      if(tm && tm.numTargets>0){
-        faceMesh=m; targetMgr=tm;
-        // target names from GLB extras (reliable), fall back to getTarget().name
-        targetNames=[];
-        for(let i=0;i<tm.numTargets;i++){
-          const t=tm.getTarget(i);
-          targetNames.push((m.geometry && m.geometry.extras && m.geometry.extras.targetNames && m.geometry.extras.targetNames[i]) || t.name || ("t"+i));
-        }
-        break;
+      if(tm && tm.numTargets>bestN){ best=m; bestN=tm.numTargets; }
+    }
+    if(best){ faceMesh=best; targetMgr=best.morphTargetManager;
+      targetNames=[];
+      for(let i=0;i<targetMgr.numTargets;i++){
+        const t=targetMgr.getTarget(i);
+        targetNames.push((best.geometry && best.geometry.extras && best.geometry.extras.targetNames && best.geometry.extras.targetNames[i]) || t.name || ("t"+i));
       }
     }
     if(!faceMesh){ log("⚠️ morph target 없음 — GLB 확인"); }
     else {
       log("🧊 GLB 로드 — morph targets: "+targetNames.length+"개 (터치로 회전)");
-      // center camera on upper body / head
+      log("   입 target 존재: "+(targetNames.indexOf("あ")>=0?"あ OK":"あ 없음"));
+      // center camera on head, allow close zoom
       let minY=Infinity,maxY=-Infinity,minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
       const allMeshes=sc.meshes;
       for(const mm of allMeshes){
@@ -249,10 +249,12 @@ function buildScene(){
         minZ=Math.min(minZ,lo.z); maxZ=Math.max(maxZ,hi.z);
       }
       const cx=(minX+maxX)/2, cz=(minZ+maxZ)/2;
-      const cy=minY+(maxY-minY)*0.75; // aim at head/upper (75% up)
+      const cy=minY+(maxY-minY)*0.80; // aim at head
       cam.setTarget(new BABYLON.Vector3(cx,cy,cz));
       const h=maxY-minY;
-      cam.radius=Math.max(2.0, h*0.9);
+      cam.radius=Math.max(1.0, h*0.45);   // closer — face fills screen
+      cam.lowerRadiusLimit=0.1;            // allow extreme zoom
+      cam.upperRadiusLimit=20;
     }
     eng.runRenderLoop(()=>sc.render());
   }, null, (sc2,msg)=>{ log("✗ GLB: "+msg); });
