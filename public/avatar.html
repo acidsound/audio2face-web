@@ -344,32 +344,60 @@ function buildScene(){
     else {
       log("🧊 GLB 로드 — morph targets: "+targetNames.length+"개");
       log("   あ OK: "+(targetNames.indexOf("あ")>=0));
-      // --- Cell-shading outline: inverted-hull (no OutlineLayer dependency) ---
-      // Clone each GLB mesh, paint it solid near-black with back-face culling OFF,
-      // scale it up slightly, and draw it BEFORE the original so only the rim shows.
-      // Lightweight (no extra geometry, just clones of existing meshes).
-      const OUTLINE_SCALE = 1.02; // 2% larger → thin rim
-      const outlineMat = new BABYLON.StandardMaterial("outlineMat", sc);
-      outlineMat.diffuseColor = new BABYLON.Color3(0.04, 0.04, 0.07);
-      outlineMat.specularColor = new BABYLON.Color3(0, 0, 0);
-      outlineMat.emissiveColor = new BABYLON.Color3(0.04, 0.04, 0.07);
-      outlineMat.disableLighting = true;
-      outlineMat.backFaceCulling = false;
-      for(const m of meshes){
-        if(!m.getTotalVertices || m.getTotalVertices()===0) continue;
-        if(m.name==="foamboard"||m.name==="floor") continue;
-        const o = m.clone(m.name+"_outline", m.parent);
-        if(!o) continue;
-        o.material = outlineMat;
-        o.scaling = m.scaling.scale(OUTLINE_SCALE);
-        o.renderingGroupId = 0;
-        m.renderingGroupId = 1;
-        o.isPickable = false;
-        // keep outline transform synced if parent animates
-        o.position.copyFrom(m.position);
-        o.rotation.copyFrom(m.rotation);
+      // --- Cell-shading outline: screen-space OutlinePass (distance-independent) ---
+      // Build a world-normal geometry buffer, then a PostProcess does Sobel edge
+      // detection on normals. Normal-based edges are invariant to camera distance,
+      // so the outline width stays constant in SCREEN PIXELS at any zoom.
+      const OUTLINE_PX = 1.5;            // outline thickness in screen pixels (constant)
+      const OUTLINE_COLOR = new BABYLON.Color3(0.04, 0.04, 0.07);
+      const gbr = sc.enableGeometryBufferRenderer();
+      if(gbr){
+        gbr.enableNormal = true;
+        gbr.enableDepth = false;
+        BABYLON.Effect.ShadersStore["outlinePPFragmentShader"] = `
+          precision highp float;
+          varying vec2 vUV;
+          uniform sampler2D textureSampler;
+          uniform sampler2D normalSampler;
+          uniform vec2 screenSize;
+          uniform float outlineWidth;
+          uniform vec3 outlineColor;
+          vec3 getN(vec2 uv){ return texture2D(normalSampler, uv).xyz * 2.0 - 1.0; }
+          bool fg(vec3 n){ return length(n) > 0.1; }
+          void main(void){
+            vec2 texel = vec2(outlineWidth) / screenSize;
+            vec3 col = texture2D(textureSampler, vUV).rgb;
+            vec3 nC = getN(vUV);
+            float edge = 0.0;
+            vec2 offs[8];
+            offs[0]=vec2( texel.x,0.0); offs[1]=vec2(-texel.x,0.0);
+            offs[2]=vec2(0.0, texel.y); offs[3]=vec2(0.0,-texel.y);
+            offs[4]=vec2( texel.x, texel.y); offs[5]=vec2(-texel.x, texel.y);
+            offs[6]=vec2( texel.x,-texel.y); offs[7]=vec2(-texel.x,-texel.y);
+            for(int i=0;i<8;i++){
+              vec3 n = getN(vUV+offs[i]);
+              if(fg(nC) && !fg(n)) edge += 1.0;        // foreground -> background (silhouette)
+              else if(!fg(nC) && fg(n)) edge += 1.0;   // background -> foreground
+              else if(fg(nC) && fg(n) && distance(n,nC) > 0.6) edge += 1.0; // internal crease
+            }
+            edge = clamp(edge, 0.0, 1.0);
+            gl_FragColor = vec4(mix(col, outlineColor, edge), 1.0);
+          }`;
+        const pp = new BABYLON.PostProcess(
+          "outlinePP", "outlinePP",
+          ["screenSize","outlineWidth","outlineColor"],
+          ["normalSampler"],
+          1.0, cam, BABYLON.Texture.NEAREST_SAMPLINGMODE, eng);
+        pp.onApply = (effect)=>{
+          effect.setTexture("normalSampler", gbr.normalTexture);
+          effect.setFloat2("screenSize", eng.getRenderWidth(), eng.getRenderHeight());
+          effect.setFloat("outlineWidth", OUTLINE_PX);
+          effect.setColor3("outlineColor", OUTLINE_COLOR);
+        };
+        log("   외곽선 적용 (OutlinePass 후처리, "+OUTLINE_PX+"px 고정)");
+      } else {
+        log("   ⚠️ GeometryBuffer 미지원 → 외곽선 생략");
       }
-      log("   외곽선 적용 (inverted-hull, scale="+OUTLINE_SCALE+")");
       // compute world bounding from ALL meshes
       let minY=Infinity,maxY=-Infinity,minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
       for(const m of sc.meshes){
