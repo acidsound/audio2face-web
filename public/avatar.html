@@ -251,7 +251,7 @@ function buildScene(){
   cam.wheelDeltaPercentage=0.01;
   cam.pinchDeltaPercentage=0.01;
   cam.panningSensibility=0; // disable panning
-  cam.fov=0.55; // moderate FOV → head fills upper 50% of screen at radius 3.5
+  cam.fov=0.50; // moderate FOV → head fills upper 50% of screen at radius 2.5
   cam.minZ=0.01; // allow very near plane
   // 3-point studio lighting + white foam-board background (set after ImportMesh)
   // 1) KEY light: PointLight, near camera, soft, warm white → main illumination
@@ -307,16 +307,16 @@ function buildScene(){
         minZ=Math.min(minZ,lo.z); maxZ=Math.max(maxZ,hi.z);
       }
       const cx=(minX+maxX)/2, cz=(minZ+maxZ)/2;
-      // aim at chin (~50% screen height): for KQ body, chin is at ~85% of body height
-      // but we want it to appear at screen center, so use a bit higher ~88%
-      const headY=minY+(maxY-minY)*0.88;
+      // aim at chin (~50% screen height): KQ body, chin at ~90% of body height
+      // with tighter radius, chin lands on screen center
+      const headY=minY+(maxY-minY)*0.90;
       // shoulderWidth as face width proxy
       const totalH = maxY-minY;
       const shoulderW = (maxX-minX);
       // face width is ~25% of shoulder width for typical anime
       const faceW = Math.max(0.08, shoulderW*0.25);
       // close-up: distance = faceW * 1.5 (inside-head), but clamp prevents
-      const faceRadius = faceW * 3.5;   // tighter framing — head fills upper half
+      const faceRadius = faceW * 2.5;   // tight: head top 1%, chin 50%, chest visible
       const safeMin = faceW * 0.8;       // close enough but outside skin
       cam.setTarget(new BABYLON.Vector3(cx, headY, cz));
       cam.radius = faceRadius;
@@ -324,9 +324,9 @@ function buildScene(){
       cam.upperRadiusLimit = Math.max(8, totalH * 1.5);
       log("   카메라: faceW="+faceW.toFixed(2)+" radius="+cam.radius.toFixed(2)+" min="+safeMin.toFixed(2)+" fov="+cam.fov.toFixed(2));
       // re-position lights relative to subject (cx, headY, cz)
-      keyLight.position=new BABYLON.Vector3(cx-0.6, headY+0.8, cz+2.5);  // near camera, slightly left
-      fillLight.position=new BABYLON.Vector3(cx+2.0, headY+0.3, cz+1.2);  // opposite
-      rimLight.position=new BABYLON.Vector3(cx, headY+0.6, cz-2.0);  // from behind
+      keyLight.position=new BABYLON.Vector3(cx-0.4, headY+0.6, cz+1.6);  // near camera, slightly left
+      fillLight.position=new BABYLON.Vector3(cx+1.4, headY+0.2, cz+0.9);  // opposite
+      rimLight.position=new BABYLON.Vector3(cx, headY+0.4, cz-1.5);  // from behind
       // camera direction: from -Z to +Z, alpha=-π/2 looks at +Z. Keep default.
       // HARD clamp every frame
       const _minR = safeMin;
