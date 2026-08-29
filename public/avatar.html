@@ -348,7 +348,7 @@ function buildScene(){
       // mesh.renderOutline draws a screen-pixel-width silhouette around each mesh
       // via the built-in OutlineRenderer (NOT the separate OutlineLayer class which
       // is not in babylon core). Width is in screen units so it stays constant at any zoom.
-      const OUTLINE_PX = 0.04;   // ~4px silhouette
+      const OUTLINE_PX = 0.008;   // thin silhouette (~1px), no mesh intrusion
       const outlineMat = new BABYLON.StandardMaterial("outlineProxyMat", sc);
       // ensure OutlineRenderer exists
       const orr = sc.getOutlineRenderer ? sc.getOutlineRenderer() : sc._outlineRenderer;
@@ -366,7 +366,7 @@ function buildScene(){
         m.outlineWidth = OUTLINE_PX;
         m.outlineRendererEnabled = true;
       }
-      log("   외곽선 적용 (OutlineRenderer, ~"+(OUTLINE_PX*100).toFixed(0)+"px, 거리무관)");
+      log("   외곽선 적용 (OutlineRenderer, width="+OUTLINE_PX+", 거리무관)");
       // compute world bounding from ALL meshes
       let minY=Infinity,maxY=-Infinity,minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
       for(const m of sc.meshes){
