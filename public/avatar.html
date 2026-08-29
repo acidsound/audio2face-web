@@ -417,7 +417,7 @@ function buildScene(){
         if(t.y<_tyL) t.y=_tyL; if(t.y>_tyR) t.y=_tyR;
         if(t.z<_tzL) t.z=_tzL; if(t.z>_tzR) t.z=_tzR;
       });
-      // WHITE FOAM-BOARD background: large plane behind subject
+      // WHITE FOAM-BOARD background: large plane behind subject, always facing camera
       // camera is at alpha=π/2 (looking from -Z), so place board at +Z behind subject
       const board=BABYLON.MeshBuilder.CreatePlane("foamboard", {width: totalH*4, height: totalH*4}, sc);
       const boardMat=new BABYLON.StandardMaterial("boardMat", sc);
@@ -427,7 +427,8 @@ function buildScene(){
       boardMat.backFaceCulling=false;
       board.material=boardMat;
       board.position=new BABYLON.Vector3(cx, (minY+maxY)/2, maxZ+totalH*0.6);
-      board.rotation.y=Math.PI; // face -Z (toward camera)
+      board.renderingGroupId=-1;   // always drawn first → behind everything
+      board.lookAt(new BABYLON.Vector3(cx, board.position.y, cz-10)); // face toward camera (-Z)
       // soft floor below for cyclorama feel
       const floor=BABYLON.MeshBuilder.CreateGround("floor", {width: totalH*4, height: totalH*1.5}, sc);
       const floorMat=new BABYLON.StandardMaterial("floorMat", sc);
