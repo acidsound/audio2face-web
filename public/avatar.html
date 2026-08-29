@@ -89,6 +89,7 @@ const AMP = { "い":1.3, "う":1.3, "え":1.3, "お":1.3, "口横広げ":1.3, "�
 const MOUTH_MIN = 0.10;
 const MOUTH_MAX = 0.80;
 let _rawJawLog = -1;
+const DBG_BS = new URLSearchParams(location.search).get("dbg")==="bs";
 // independent idle blink (decoupled from mouth): drives まばたき target directly
 let BLINK_IDX = -1;          // targetNames index of まばたき
 let blinkVal = 0;            // current blink amount 0..1
@@ -150,7 +151,17 @@ function applyBlendshape(bs){
     // exponential ease-out on close: pick lerp by direction
     const L = (tgt>cur) ? LERP_OPEN : LERP_CLOSE;
     targetMgr.getTarget(i).influence = cur + (tgt-cur)*L;
-  }
+    }
+    // --- diagnostic: log raw model output + eye target influences during speech ---
+    if(DBG_BS && playing){
+      const now=performance.now();
+      if(!applyBlendshape._last || now-applyBlendshape._last>400){
+        applyBlendshape._last=now;
+        const nz=[]; for(let i=0;i<bs.length;i++){ if(bs[i]>0.02) nz.push(i+":"+bs[i].toFixed(2)); }
+        const eyeInf=[]; ["まばたき","じと目","びっくり","あ"].forEach(n=>{ const ti=targetNames.indexOf(n); if(ti>=0) eyeInf.push(n+"="+targetMgr.getTarget(ti).influence.toFixed(2)); });
+        console.log("[bs] nonzero:", nz.join(" "), "| eyes:", eyeInf.join(" "));
+      }
+    }
 }
 function resetMouth(){
   if(!targetMgr) return;
