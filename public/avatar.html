@@ -152,7 +152,7 @@ async function play(){
     const pre=new ort.Tensor("float32",new Float32Array(winN),[1,winN]);
     for(let k=0;k<5;k++){ await session.run({audio:pre,emo_id:emo,time_steps:ts}); }
     const frames=new Array(total);
-    let prodI=0;
+    let prodI=0, lastBS=null;
     const produce=async()=>{
       for(; prodI<total && !stopFlag; prodI++){
         const s=prodI*hopN, chunk=idx.subarray(s,s+winN);
@@ -171,7 +171,10 @@ async function play(){
       if(stopFlag) return;
       const t=ac.currentTime-t0;
       const ci=Math.floor(t/HOP);
-      if(ci>=0 && ci<total && frames[ci]) applyBlendshape(frames[ci]);
+      if(ci>=0 && ci<total){
+        if(frames[ci]) lastBS=frames[ci];  // hold last valid frame if producer hasn't caught up
+        if(lastBS) applyBlendshape(lastBS);
+      }
       $("prog") && ($("prog").textContent=Math.min(100,Math.max(0,Math.floor(t/duration*100)))+"%");
       if(t<duration) requestAnimationFrame(tick);
     };
@@ -201,7 +204,13 @@ function buildScene(){
   BABYLON.MeshBuilder.CreateSphere("eyeL",{diameter:0.28},sc).position.set(-0.45,0.35,0.95);
   BABYLON.MeshBuilder.CreateSphere("eyeR",{diameter:0.28},sc).position.set(0.45,0.35,0.95);
   const lip=BABYLON.MeshBuilder.CreateTorus("lip",{diameter:0.55,thickness:0.06},sc); lip.position.z=1.0;
-  mouthInner=BABYLON.MeshBuilder.CreatePlane("mouthIn",{size:0.4},sc); mouthInner.position.z=1.01; mouthInner.scaling.y=0.05;
+  // mouth as child of head, facing +Z (camera), double-sided so it's visible
+  mouthInner=BABYLON.MeshBuilder.CreatePlane("mouthIn",{size:0.4},sc);
+  mouthInner.parent=head; mouthInner.position=new BABYLON.Vector3(0,0,1.0);
+  mouthInner.scaling.y=0.05;
+  const mm=new BABYLON.StandardMaterial("mm",sc);
+  mm.diffuseColor=new BABYLON.Color3(0.9,0.3,0.4); mm.backFaceCulling=false;
+  mouthInner.material=mm;
   scene=sc; renderLoop=eng;
   eng.runRenderLoop(()=>sc.render());
   window.addEventListener("resize",()=>eng.resize());
