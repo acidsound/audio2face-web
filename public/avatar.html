@@ -348,7 +348,8 @@ function buildScene(){
       // mesh.renderOutline draws a screen-pixel-width silhouette around each mesh
       // via the built-in OutlineRenderer (NOT the separate OutlineLayer class which
       // is not in babylon core). Width is in screen units so it stays constant at any zoom.
-      const OUTLINE_PX = 0.002;   // half of previous — very thin silhouette
+      const OUTLINE_PX = 0.002;   // default thin silhouette
+      const OUTLINE_PX_EYEHAIR = 0.001;  // meshes[3] bundles eye+hair: ultra-thin so eye texture survives, hair still outlined
       const outlineMat = new BABYLON.StandardMaterial("outlineProxyMat", sc);
       // ensure OutlineRenderer exists
       const orr = sc.getOutlineRenderer ? sc.getOutlineRenderer() : sc._outlineRenderer;
@@ -366,10 +367,11 @@ function buildScene(){
         if(m.name==="foamboard"||m.name==="floor") continue;
         const ln=m.name.toLowerCase();
         if(ln.includes("eye")||ln.includes("eyeball")||ln.includes("ball")||ln.includes("iris")||ln.includes("pupil")) continue; // skip eyeball/eye meshes
-        if(mi===3) continue; // meshes[3] bundles eye+hair together — skip to preserve eye texture
+        // meshes[3] bundles eye+hair: use ultra-thin width so eye texture isn't covered but hair still outlines
+        const w = (mi===3) ? OUTLINE_PX_EYEHAIR : OUTLINE_PX;
         m.renderOutline = true;
         m.outlineColor = new BABYLON.Color3(0.04, 0.04, 0.07);
-        m.outlineWidth = OUTLINE_PX;
+        m.outlineWidth = w;
         m.outlineRendererEnabled = true;
       }
       log("   외곽선 적용 (OutlineRenderer, width="+OUTLINE_PX+", 거리무관)");
