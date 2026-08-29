@@ -92,6 +92,7 @@ let _rawJawLog = -1;
 const DBG_BS = new URLSearchParams(location.search).get("dbg")==="bs";
 // independent idle blink (decoupled from mouth): driven inside the render loop, not rAF chains
 let BLINK_IDX = -1;          // targetNames index of まばたき
+let blinkVal = 0;            // current blink amount 0..1
 let blinkPhase = "idle";     // idle | closing | opening
 let blinkT = 0;              // ms elapsed in current phase
 let blinkNext = 2200 + Math.random()*3200;  // ms until next blink starts
