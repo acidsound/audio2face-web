@@ -223,9 +223,15 @@ function buildScene(){
   BABYLON.SceneLoader.ImportMesh("", "", GLB_URL, sc, (meshes)=>{
     // find mesh with morph targets
     for(const m of meshes){
-      if(m.morphTargetManager && m.morphTargetManager.numTargets>0){
-        faceMesh=m; targetMgr=m.morphTargetManager;
-        targetNames=targetMgr.targets.map(t=>t.name||"");
+      const tm=m.morphTargetManager;
+      if(tm && tm.numTargets>0){
+        faceMesh=m; targetMgr=tm;
+        // target names from GLB extras (reliable), fall back to getTarget().name
+        targetNames=[];
+        for(let i=0;i<tm.numTargets;i++){
+          const t=tm.getTarget(i);
+          targetNames.push((m.geometry && m.geometry.extras && m.geometry.extras.targetNames && m.geometry.extras.targetNames[i]) || t.name || ("t"+i));
+        }
         break;
       }
     }
