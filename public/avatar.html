@@ -360,11 +360,13 @@ function buildScene(){
       }
       // list mesh names (debug)
       log("   meshes: "+meshes.map(m=>m.name).join(" | "));
-      for(const m of meshes){
+      for(let mi=0; mi<meshes.length; mi++){
+        const m=meshes[mi];
         if(!m.getTotalVertices || m.getTotalVertices()===0) continue;
         if(m.name==="foamboard"||m.name==="floor") continue;
         const ln=m.name.toLowerCase();
         if(ln.includes("eye")||ln.includes("eyeball")||ln.includes("ball")||ln.includes("iris")||ln.includes("pupil")) continue; // skip eyeball/eye meshes
+        if(mi===3) continue; // meshes[3] bundles eye+hair together — skip to preserve eye texture
         m.renderOutline = true;
         m.outlineColor = new BABYLON.Color3(0.04, 0.04, 0.07);
         m.outlineWidth = OUTLINE_PX;
