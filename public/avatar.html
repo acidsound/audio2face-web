@@ -38,7 +38,7 @@
   <canvas id="canvas"></canvas>
   <div class="hud">
     <div class="card"><div class="k">추론</div><div class="v"><span id="lat">–</span><small> ms</small></div></div>
-    <div class="card"><div class="k">홉</div><div class="v"><span id="hop">50</span><small> ms</small></div></div>
+    <div class="card"><div class="k">홉</div><div class="v"><span id="hop">–</span><small> ms</small></div></div>
     <div class="card"><div class="k">실시간</div><div class="v" id="rt">–</div></div>
   </div>
   <div class="controls"><button id="play">▶ TTS + 아바타 립싱크</button></div>
@@ -59,39 +59,43 @@ const log=m=>{ const el=$("log"); el.textContent+=m+"\n"; el.scrollTop=el.scroll
 ort.env.wasm.wasmPaths="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/";
 ort.env.wasm.numThreads=Math.min(4, navigator.hardwareConcurrency||4);
 
-let session=null, engine=null, scene=null, mouthTarget=null, stopFlag=false;
+let session=null, engine=null, scene=null, mouthInner=null, stopFlag=false;
 
-// ---- Babylon scene: procedural head with mouth-open morph target ----
-// (Replace loadGLB() with a real DLP3D avatar GLB to map all 51 blendshapes)
+// ---- Babylon scene: head + separate mouth meshes (no morph collapse) ----
 function buildScene(){
   const canvas=$("canvas");
   engine=new BABYLON.Engine(canvas, true, {preserveDrawingBuffer:true, stencil:true});
   scene=new BABYLON.Scene(engine);
   scene.clearColor=new BABYLON.Color4(0.07,0.08,0.10,1);
-  new BABYLON.ArcRotateCamera("cam", -Math.PI/2, Math.PI/2, 4, BABYLON.Vector3.Zero(), scene).attachControl(canvas,true);
+  const cam=new BABYLON.ArcRotateCamera("cam", -Math.PI/2, Math.PI/2.1, 4.2, BABYLON.Vector3.Zero(), scene);
+  cam.attachControl(canvas,true); cam.lowerRadiusLimit=2.5; cam.upperRadiusLimit=8;
   new BABYLON.HemisphericLight("l", new BABYLON.Vector3(0,1,0), scene);
-  // head sphere
-  const head=BABYLON.MeshBuilder.CreateSphere("head",{diameter:2,segments:24},scene);
-  head.material=new BABYLON.StandardMaterial("m",scene); head.material.diffuseColor=new BABYLON.Color3(0.6,0.65,0.8);
-  // morph: mouth open (scale lower-front vertices down + forward)
-  const mgr=new BABYLON.MorphTargetManager();
-  head.morphTargetManager=mgr;
-  const positions=head.getVerticesData(BABYLON.VertexBuffer.PositionKind);
-  const mouth=new Float32Array(positions.length);
-  for(let v=0; v<positions.length; v+=3){
-    const x=positions[v], y=positions[v+1], z=positions[v+2];
-    // mouth region: lower front of face
-    if(y<-0.2 && z>0.4){ mouth[v+1]=y-0.35; mouth[v+2]=z+0.05; }
+  // head
+  const head=BABYLON.MeshBuilder.CreateSphere("head",{diameter:2,segments:32},scene);
+  const hm=new BABYLON.StandardMaterial("hm",scene); hm.diffuseColor=new BABYLON.Color3(0.55,0.6,0.78); hm.specularColor=new BABYLON.Color3(0.1,0.1,0.1);
+  head.material=hm;
+  // eyes
+  for(const sx of [-0.35,0.35]){
+    const e=BABYLON.MeshBuilder.CreateSphere("eye"+sx,{diameter:0.28,segments:16},scene);
+    e.position.set(sx,0.25,0.92);
+    const em=new BABYLON.StandardMaterial("em",scene); em.diffuseColor=new BABYLON.Color3(0.95,0.97,1); em.emissiveColor=new BABYLON.Color3(0.2,0.25,0.3);
+    e.material=em;
   }
-  const mt=new BABYLON.MorphTarget("mouthOpen", 0);
-  mt.setPositions(mouth);
-  mgr.addTarget(mt);
-  mouthTarget=mt;
+  // mouth: outer lip (flat ellipse) + inner (dark, scales open)
+  const lip=BABYLON.MeshBuilder.CreateTorus("lip",{diameter:0.55, thickness:0.06, tessellation:32},scene);
+  lip.position.set(0,-0.35,0.95); lip.rotation.x=Math.PI/2;
+  const lm=new BABYLON.StandardMaterial("lm",scene); lm.diffuseColor=new BABYLON.Color3(0.8,0.45,0.5);
+  lip.material=lm;
+  mouthInner=BABYLON.MeshBuilder.CreatePlane("mouthIn",{size:0.4},scene);
+  mouthInner.position.set(0,-0.35,0.952);
+  const im=new BABYLON.StandardMaterial("im",scene); im.diffuseColor=new BABYLON.Color3(0.25,0.05,0.1); im.backFaceCulling=false;
+  mouthInner.material=im;
+  mouthInner.scaling.y=0.05; // closed by default
   engine.runRenderLoop(()=>scene.render());
-  log("🧊 Babylon 씬 준비 (프로시저럴 헤드 + mouthOpen morph)");
+  log("🧊 Babylon 씬 준비 (헤드+입 메시)");
 }
 
-// ---- model cache (same as bench) ----
+// ---- model cache ----
 function openDB(){ return new Promise((res,rej)=>{ const r=indexedDB.open(DB_NAME,DB_VER); r.onupgradeneeded=()=>r.result.createObjectStore(STORE); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
 async function idbGet(k){ const db=await openDB(); return new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readonly"); const q=tx.objectStore(STORE).get(k); q.onsuccess=()=>res(q.result||null); q.onerror=()=>rej(q.error); }); }
 async function idbPut(k,buf){ try{ const db=await openDB(); await new Promise((res,rej)=>{ const tx=db.transaction(STORE,"readwrite"); tx.objectStore(STORE).put(buf,k); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); }catch(e){ log("⚠️ 저장 실패: "+e.message); } }
@@ -121,12 +125,11 @@ async function initModel(){
   $("load").textContent="FAIL"; return false;
 }
 
-// blendshape(51) → avatar. Currently maps mouth channel (32) to mouthOpen morph.
-// Full DLP3D rig: each of 51 channels → corresponding morph target on the GLB.
+// blendshape(51) → mouth. Channel 32 = mouth open (clamped). Full 51ch rig = TODO.
 function applyBlendshape(bs){
-  if(!mouthTarget) return;
-  const mouthVal=Math.max(0,Math.min(1,(bs[32]||0)*8));
-  mouthTarget.influence=mouthVal;
+  if(!mouthInner) return;
+  const v=Math.max(0, Math.min(1, (bs[32]||0)*8));
+  mouthInner.scaling.y=0.05 + v*1.0; // 0.05 closed → 1.05 open
 }
 
 const latHist=[];
@@ -147,30 +150,41 @@ async function loadAudio(url){
 }
 async function play(){
   if(!session){ log("모델 준비 안 됨"); return; }
+  if(!mouthInner){ log("씬 미준비"); return; }
   stopFlag=false;
+  $("hop").textContent=Math.round(HOP*1000);
   const {idx,ac,dec}=await loadAudio("./test_voice.wav");
   const src=ac.createBufferSource(); src.buffer=dec; src.connect(ac.destination);
   const winN=Math.floor(WIN*SR), hopN=Math.floor(HOP*SR);
-  const total=Math.max(1,Math.floor((idx.length-winN)/hopN));
+  const total=Math.max(1, Math.floor((idx.length-winN)/hopN));
   const emo=new ort.Tensor("int32",new Int32Array([1]),[1]);
   const ts=new ort.Tensor("int32",new Int32Array([TS_OUT]),[1]);
-  let i=0; const t0=ac.currentTime+0.05; src.start(t0);
-  while(i<total && !stopFlag){
-    const s=i*hopN, chunk=idx.subarray(s,s+winN);
-    const aT=new ort.Tensor("float32",chunk,[1,chunk.length]);
-    const ti=performance.now();
-    const out=await session.run({audio:aT,emo_id:emo,time_steps:ts});
-    record(performance.now()-ti);
-    applyBlendshape(out[Object.keys(out)[0]].data.slice(-FRAME));
-    i++;
-    const target=t0+i*HOP; const wait=target-ac.currentTime; if(wait>0) await new Promise(r=>setTimeout(r,wait*1000));
-  }
-  if(!stopFlag){
-    const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
-    const sorted=[...latHist].sort((a,b)=>a-b); const p95=sorted[Math.floor(sorted.length*0.95)];
-    log(`✅ 평균 ${mean.toFixed(1)}ms / p95 ${p95.toFixed(1)}ms → ${mean<HOP*1000?"실시간 OK":"LAG"}`);
-  }
-  src.stop(); ac.close();
+  let i=0;
+  src.onended=()=>{ try{ ac.close(); }catch(e){} log("🔚 재생 종료"); };
+  const inferLoop=async()=>{
+    const t0=ac.currentTime+0.05; src.start(t0);
+    while(i<total && !stopFlag){
+      const s=i*hopN, chunk=idx.subarray(s,s+winN);
+      const aT=new ort.Tensor("float32",chunk,[1,chunk.length]);
+      const ti=performance.now();
+      try{
+        const out=await session.run({audio:aT,emo_id:emo,time_steps:ts});
+        const dt=performance.now()-ti;
+        applyBlendshape(out[Object.keys(out)[0]].data.slice(-FRAME));
+        record(dt);
+      }catch(e){ log("💥 추론 에러 @ "+i+": "+e.message); break; }
+      i++;
+      const targetMs=t0*1000 + i*HOP*1000;
+      const wait=targetMs - ac.currentTime*1000;
+      if(wait>0) await new Promise(r=>setTimeout(r, wait));
+    }
+    if(!stopFlag){
+      const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
+      const sorted=[...latHist].sort((a,b)=>a-b); const p95=sorted[Math.floor(sorted.length*0.95)];
+      log(`✅ 평균 ${mean.toFixed(1)}ms / p95 ${p95.toFixed(1)}ms → ${mean<HOP*1000?"실시간 OK":"LAG"}`);
+    }
+  };
+  inferLoop();
 }
 $("play").onclick=()=>play();
 
