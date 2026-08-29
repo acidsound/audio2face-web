@@ -238,8 +238,8 @@ function buildScene(){
   const canvas=$("render");
   const eng=new BABYLON.Engine(canvas,true,{preserveDrawingBuffer:true,stencil:true});
   const sc=new BABYLON.Scene(eng); sc.clearColor=new BABYLON.Color4(0.92, 0.92, 0.90, 1);
-  // camera: KQ GLB face toward -Z; alpha=π/2. beta π/2.6 looks slightly down at face.
-  const cam=new BABYLON.ArcRotateCamera("cam", Math.PI/2, Math.PI/2.6, 3.5, BABYLON.Vector3.Zero(), sc);
+  // camera: KQ GLB face toward -Z. beta π/2.5 — slight downward look at face.
+  const cam=new BABYLON.ArcRotateCamera("cam", Math.PI/2, Math.PI/2.5, 3.5, BABYLON.Vector3.Zero(), sc);
   cam.attachControl(canvas,true);
   // HARD CLAMP: never enter mesh
   cam.lowerRadiusLimit=0.15;   // allow extreme close-up
@@ -303,7 +303,8 @@ function buildScene(){
         minZ=Math.min(minZ,lo.z); maxZ=Math.max(maxZ,hi.z);
       }
       const cx=(minX+maxX)/2, cz=(minZ+maxZ)/2;
-      // aim at face center: ~88% of body height (eyes→mouth center)
+      // aim at chin (~50% screen height): for KQ body, chin is at ~85% of body height
+      // but we want it to appear at screen center, so use a bit higher ~88%
       const headY=minY+(maxY-minY)*0.88;
       // shoulderWidth as face width proxy
       const totalH = maxY-minY;
@@ -311,7 +312,7 @@ function buildScene(){
       // face width is ~25% of shoulder width for typical anime
       const faceW = Math.max(0.08, shoulderW*0.25);
       // close-up: distance = faceW * 1.5 (inside-head), but clamp prevents
-      const faceRadius = faceW * 2.5;   // reasonable distance with wider FOV
+      const faceRadius = faceW * 4.0;   // shoulder→chest visible, chin at center
       const safeMin = faceW * 0.8;       // close enough but outside skin
       cam.setTarget(new BABYLON.Vector3(cx, headY, cz));
       cam.radius = faceRadius;
@@ -319,9 +320,9 @@ function buildScene(){
       cam.upperRadiusLimit = Math.max(8, totalH * 1.5);
       log("   카메라: faceW="+faceW.toFixed(2)+" radius="+cam.radius.toFixed(2)+" min="+safeMin.toFixed(2)+" fov="+cam.fov.toFixed(2));
       // re-position lights relative to subject (cx, headY, cz)
-      keyLight.position=new BABYLON.Vector3(cx-0.4, headY+0.6, cz+1.4);  // near camera, slightly left
-      fillLight.position=new BABYLON.Vector3(cx+1.3, headY+0.2, cz+0.8);  // opposite
-      rimLight.position=new BABYLON.Vector3(cx, headY+0.4, cz-1.4);  // from behind
+      keyLight.position=new BABYLON.Vector3(cx-0.6, headY+0.8, cz+2.5);  // near camera, slightly left
+      fillLight.position=new BABYLON.Vector3(cx+2.0, headY+0.3, cz+1.2);  // opposite
+      rimLight.position=new BABYLON.Vector3(cx, headY+0.6, cz-2.0);  // from behind
       // camera direction: from -Z to +Z, alpha=-π/2 looks at +Z. Keep default.
       // HARD clamp every frame
       const _minR = safeMin;
@@ -330,17 +331,17 @@ function buildScene(){
       });
       // WHITE FOAM-BOARD background: large plane behind subject
       // camera is at alpha=π/2 (looking from -Z), so place board at +Z behind subject
-      const board=BABYLON.MeshBuilder.CreatePlane("foamboard", {width: totalH*3, height: totalH*3}, sc);
+      const board=BABYLON.MeshBuilder.CreatePlane("foamboard", {width: totalH*4, height: totalH*4}, sc);
       const boardMat=new BABYLON.StandardMaterial("boardMat", sc);
       boardMat.diffuseColor=new BABYLON.Color3(0.95, 0.95, 0.93);
       boardMat.specularColor=new BABYLON.Color3(0, 0, 0);
       boardMat.emissiveColor=new BABYLON.Color3(0.55, 0.55, 0.53);
       boardMat.backFaceCulling=false;
       board.material=boardMat;
-      board.position=new BABYLON.Vector3(cx, (minY+maxY)/2, maxZ+totalH*0.4);
+      board.position=new BABYLON.Vector3(cx, (minY+maxY)/2, maxZ+totalH*0.6);
       board.rotation.y=Math.PI; // face -Z (toward camera)
       // soft floor below for cyclorama feel
-      const floor=BABYLON.MeshBuilder.CreateGround("floor", {width: totalH*3, height: totalH*1.2}, sc);
+      const floor=BABYLON.MeshBuilder.CreateGround("floor", {width: totalH*4, height: totalH*1.5}, sc);
       const floorMat=new BABYLON.StandardMaterial("floorMat", sc);
       floorMat.diffuseColor=new BABYLON.Color3(0.85, 0.85, 0.83);
       floorMat.specularColor=new BABYLON.Color3(0,0,0);
