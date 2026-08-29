@@ -116,10 +116,15 @@ async function initModel(){
       $("load").textContent=`시도 ${c.label}`;
       const buf=await getModelBuffer(c.model);
       session=await ort.InferenceSession.create(buf,{executionProviders:[c.ep],graphOptimizationLevel:"all"});
+      // WASM warmup: lazy-compile kernels + JIT, so first real run is fast
+      const wa=new ort.Tensor("float32", new Float32Array(WIN*SR), [1, WIN*SR]);
+      const we=new ort.Tensor("int32", new Int32Array([1]), [1]);
+      const wt=new ort.Tensor("int32", new Int32Array([TS_OUT]), [1]);
+      for(let k=0;k<5;k++){ await session.run({audio:wa, emo_id:we, time_steps:wt}); }
       const dt=(performance.now()-t0)/1000;
       $("ep").textContent="EP: "+c.label.toUpperCase(); $("ep").className="pill ok";
       $("load").textContent=`ready (${dt.toFixed(1)}s)`; $("load").className="pill ok";
-      log(`✅ ${c.label} 로드 (${dt.toFixed(1)}s)`); return true;
+      log(`✅ ${c.label} 로드 (${dt.toFixed(1)}s) + warmup`); return true;
     }catch(e){ log(`✗ ${c.label}: ${e.message}`); }
   }
   $("load").textContent="FAIL"; return false;
