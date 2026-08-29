@@ -344,19 +344,14 @@ function buildScene(){
     else {
       log("🧊 GLB 로드 — morph targets: "+targetNames.length+"개");
       log("   あ OK: "+(targetNames.indexOf("あ")>=0));
-      // --- Cell-shading outline: screen-space DEPTH-EDGE OutlinePass (distance-independent) ---
-      // On macOS Chrome (WebGL2) the GeometryBuffer depth texture is available, so we
-      // detect depth discontinuities and draw constant screen-px internal+silhouette lines.
-      // (Normal buffer was unavailable in this env; depth is the reliable channel.)
-      const OUTLINE_PX = 1.4;            // edge thickness in screen pixels (constant)
+      // --- Cell-shading outline: DEPTH-EDGE via PrePassRenderer (GeometryBuffer depthTex=NO bug) ---
+      const OUTLINE_PX = 1.4;
       const OUTLINE_COLOR = new BABYLON.Color3(0.04, 0.04, 0.07);
       const _dbgDepth = new URLSearchParams(location.search).get("dbg")==="depth";
-      const gbr = sc.enableGeometryBufferRenderer();
-      const _dt = gbr && gbr.getDepthTexture ? gbr.getDepthTexture() : (gbr?gbr.depthTexture:null);
-      log("   GeometryBuffer: "+(gbr?"OK":"FAIL")+", depthTex="+( _dt?"yes":"NO")+", isPPRenderer="+(sc.prePassRenderer?"yes":"no"));
-      if(gbr){
-        gbr.enableDepth = true;
-        gbr.enableNormal = false;
+      const ppr = sc.enablePrePassRenderer();
+      const _dt = ppr ? ppr.getTexture(BABYLON.Constants.PREPASS_DEPTH_TEXTURE_TYPE) : null;
+      log("   PrePassRenderer: "+(ppr?"OK":"FAIL")+", depthTex="+( _dt?"yes":"NO"));
+      if(ppr){
         BABYLON.Effect.ShadersStore["outlinePPFragmentShader"] = `
           precision highp float;
           varying vec2 vUV;
@@ -368,7 +363,7 @@ function buildScene(){
           float getD(vec2 uv){ return texture2D(depthSampler, uv).r; }
           float edgeAt(vec2 uv, vec2 texel){
             float c = getD(uv);
-            if(c<=0.0) return 0.0;  // background
+            if(c<=0.0) return 0.0;
             vec2 offs[8];
             offs[0]=vec2( texel.x,0.0); offs[1]=vec2(-texel.x,0.0);
             offs[2]=vec2(0.0, texel.y); offs[3]=vec2(0.0,-texel.y);
@@ -377,8 +372,7 @@ function buildScene(){
             float e=0.0;
             for(int i=0;i<8;i++){
               float d = getD(uv+offs[i]);
-              if(d<=0.0) { e += 1.0; continue; }   // foreground->background (silhouette)
-              // relative depth step — catches lip/nose protrusion at face zoom
+              if(d<=0.0) { e += 1.0; continue; }
               if(abs(d-c) > 0.0015 + abs(c)*0.002) e += 1.0;
             }
             return clamp(e/8.0, 0.0, 1.0);
@@ -409,8 +403,8 @@ function buildScene(){
           1.0, cam, BABYLON.Texture.NEAREST_SAMPLINGMODE, eng,
           false, _dbgDepth ? "#define DBG_DEPTH" : "");
         pp.onApply = (effect)=>{
-          const dtex = gbr.getDepthTexture ? gbr.getDepthTexture() : (gbr.depthTexture||null);
-          if(!dtex) { /* depth not ready yet this frame; skip */ return; }
+          const dtex = ppr.getTexture(BABYLON.Constants.PREPASS_DEPTH_TEXTURE_TYPE);
+          if(!dtex) return;
           effect.setTexture("depthSampler", dtex);
           effect.setFloat2("screenSize", eng.getRenderWidth(), eng.getRenderHeight());
           effect.setFloat("outlineWidth", OUTLINE_PX);
@@ -419,7 +413,7 @@ function buildScene(){
         BABYLON.FxaaPostProcess && new BABYLON.FxaaPostProcess("fxaa", 1.0, cam);
         log("   외곽선 적용 (Depth-Edge OutlinePass "+OUTLINE_PX+"px + FXAA)");
       } else {
-        log("   ⚠️ GeometryBuffer 미지원 → 외곽선 생략");
+        log("   ⚠️ PrePassRenderer 미지원 → 외곽선 생략");
       }
       // compute world bounding from ALL meshes
       let minY=Infinity,maxY=-Infinity,minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
