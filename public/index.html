@@ -67,7 +67,7 @@
 </main>
 
 <script type="module">
-const SR = 16000, WIN = 0.20, HOP = 0.05, TS_OUT = 50, FRAME = 51;
+const SR = 16000, WIN = 0.20, HOP = 0.10, TS_OUT = 50, FRAME = 51;
 const DB_NAME = "a2f-models", DB_VER = 1, STORE = "blobs";
 const CANDIDATES = [
   { ep:"wasm",   model:"./models/unitalker_v0.4.0_base.int8.onnx", label:"WASM·INT8" },
@@ -161,8 +161,9 @@ async function playAndSync(){
   const emo=new ort.Tensor("int32",new Int32Array([1]),[1]);
   const ts=new ort.Tensor("int32",new Int32Array([TS_OUT]),[1]);
   let nextPlay=ac.currentTime+0.05; src.start(nextPlay);
-  let i=0, bufCount=0;
+  let i=0, bufCount=0, behind=0;
   const inferLoop=async()=>{
+    const chunkStart=performance.now();
     while(i<total && !stopFlag){
       const s=i*hopN, chunk=idx.subarray(s,s+winN);
       const aT=new ort.Tensor("float32",chunk,[1,chunk.length]);
@@ -172,22 +173,25 @@ async function playAndSync(){
         const dt=performance.now()-t0;
         draw(out[Object.keys(out)[0]].data.slice(-FRAME));
         record(dt);
+        if(dt>HOP*1000) behind++;
       }catch(e){ log("💥 추론 에러 @ "+i+": "+e.message); break; }
       i++; bufCount++;
       $("buf").textContent=bufCount;
-      // pace to real audio: wait until playback reached this chunk
-      const target=nextPlay + (i*HOP);
-      const wait=target-ac.currentTime;
-      if(wait>0) await new Promise(r=>setTimeout(r, wait*1000));
+      // throttle: each chunk starts exactly HOP apart, synced to audio clock
+      const targetMs = nextPlay*1000 + i*HOP*1000;
+      const nowMs = ac.currentTime*1000;
+      const wait = targetMs - nowMs;
+      if(wait>0) await new Promise(r=>setTimeout(r, wait));
     }
     if(!stopFlag){
       const mean=latHist.reduce((a,b)=>a+b,0)/latHist.length;
       const sorted=[...latHist].sort((a,b)=>a-b); const p95=sorted[Math.floor(sorted.length*0.95)];
       $("avg").textContent=mean.toFixed(0); $("p95").textContent=p95.toFixed(0);
-      log(`✅ 완료 평균 ${mean.toFixed(1)}ms / p95 ${p95.toFixed(1)}ms`);
-      log(mean<HOP*1000?"→ 실시간 충족":"→ 실시간 미충족");
+      log(`✅ 완료 평균 ${mean.toFixed(1)}ms / p95 ${p95.toFixed(1)}ms / 밀림 ${behind}청크`);
+      log(mean<HOP*1000?"→ 실시간 충족":"→ 실시간 미충족 (추론이 홉보다 느림)");
     }
-    src.stop(); ac.close();
+    try{ src.stop(); }catch(e){}
+    ac.close();
   };
   inferLoop();
 }
