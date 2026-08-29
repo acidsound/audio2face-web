@@ -59,7 +59,14 @@ const log=m=>{ const el=$("log"); el.textContent+=m+"\n"; el.scrollTop=el.scroll
 ort.env.wasm.wasmPaths="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/";
 ort.env.wasm.numThreads=Math.min(4, navigator.hardwareConcurrency||4);
 
-let session=null, engine=null, scene=null, mouthInner=null, stopFlag=false;
+let session=null, engine=null, scene=null, mouthInner=null, stopFlag=false, audioCtx=null, curSrc=null, playing=false;
+
+// single AudioContext reused across plays (iOS Safari: many contexts → silent + throttled)
+function getAudioCtx(){
+  if(!audioCtx){ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+  if(audioCtx.state==="suspended"){ audioCtx.resume(); }
+  return audioCtx;
+}
 
 // ---- Babylon scene: head + separate mouth meshes (no morph collapse) ----
 function buildScene(){
@@ -110,17 +117,22 @@ async function getModelBuffer(url){
   await idbPut(key,blob.buffer); return blob.buffer;
 }
 async function initModel(){
+  if(session){ return true; } // already loaded — reuse, never recreate (OOM on iOS)
   const t0=performance.now();
   for(const c of CANDIDATES){
     try{
       $("load").textContent=`시도 ${c.label}`;
       const buf=await getModelBuffer(c.model);
-      session=await ort.InferenceSession.create(buf,{executionProviders:[c.ep],graphOptimizationLevel:"all"});
+      let s=null;
+      try{
+        s=await ort.InferenceSession.create(buf,{executionProviders:[c.ep],graphOptimizationLevel:"all"});
+      }catch(e){ log(`✗ ${c.label} 생성: ${e.message}`); if(s&&s.release) await s.release(); continue; }
       // WASM warmup: lazy-compile kernels + JIT, so first real run is fast
       const wa=new ort.Tensor("float32", new Float32Array(WIN*SR), [1, WIN*SR]);
       const we=new ort.Tensor("int32", new Int32Array([1]), [1]);
       const wt=new ort.Tensor("int32", new Int32Array([TS_OUT]), [1]);
-      for(let k=0;k<5;k++){ await session.run({audio:wa, emo_id:we, time_steps:wt}); }
+      for(let k=0;k<5;k++){ await s.run({audio:wa, emo_id:we, time_steps:wt}); }
+      session=s;
       const dt=(performance.now()-t0)/1000;
       $("ep").textContent="EP: "+c.label.toUpperCase(); $("ep").className="pill ok";
       $("load").textContent=`ready (${dt.toFixed(1)}s)`; $("load").className="pill ok";
@@ -145,27 +157,34 @@ function record(dt){
   const ok=mean<HOP*1000; $("rt").textContent=ok?"OK ✓":"LAG ✗"; $("rt").style.color=ok?"#7ff0a8":"#ff9bb0";
 }
 async function loadAudio(url){
+  const ac=getAudioCtx();
   const buf=await (await fetch(url)).arrayBuffer();
-  const ac=new (window.AudioContext||window.webkitAudioContext)();
   const dec=await ac.decodeAudioData(buf);
   const ch=dec.getChannelData(0); const fromSR=dec.sampleRate;
   const n=Math.floor(ch.length*SR/fromSR); const idx=new Float32Array(n);
   for(let i=0;i<n;i++){ const p=i*fromSR/SR; const i0=Math.floor(p),i1=Math.min(i0+1,ch.length-1); idx[i]=ch[i0]+(p-i0)*(ch[i1]-ch[i0]); }
-  return {idx,ac,dec};
+  return {idx,dec};
+}
+function stopPlay(){
+  stopFlag=true; playing=false;
+  try{ if(curSrc){ curSrc.onended=null; curSrc.stop(); } }catch(e){}
+  curSrc=null;
 }
 async function play(){
   if(!session){ log("모델 준비 안 됨"); return; }
   if(!mouthInner){ log("씬 미준비"); return; }
-  stopFlag=false;
+  if(playing){ stopPlay(); await new Promise(r=>setTimeout(r,50)); }
+  stopFlag=false; playing=true;
   $("hop").textContent=Math.round(HOP*1000);
-  const {idx,ac,dec}=await loadAudio("./test_voice.wav");
-  const src=ac.createBufferSource(); src.buffer=dec; src.connect(ac.destination);
+  const ac=getAudioCtx();
+  const {idx,dec}=await loadAudio("./test_voice.wav");
+  const src=ac.createBufferSource(); src.buffer=dec; src.connect(ac.destination); curSrc=src;
   const winN=Math.floor(WIN*SR), hopN=Math.floor(HOP*SR);
   const total=Math.max(1, Math.floor((idx.length-winN)/hopN));
   const emo=new ort.Tensor("int32",new Int32Array([1]),[1]);
   const ts=new ort.Tensor("int32",new Int32Array([TS_OUT]),[1]);
   let i=0;
-  src.onended=()=>{ try{ ac.close(); }catch(e){} log("🔚 재생 종료"); };
+  src.onended=()=>{ if(!stopFlag){ playing=false; log("🔚 재생 종료"); } };
   const inferLoop=async()=>{
     const t0=ac.currentTime+0.05; src.start(t0);
     while(i<total && !stopFlag){
@@ -177,7 +196,7 @@ async function play(){
         const dt=performance.now()-ti;
         applyBlendshape(out[Object.keys(out)[0]].data.slice(-FRAME));
         record(dt);
-      }catch(e){ log("💥 추론 에러 @ "+i+": "+e.message); break; }
+      }catch(e){ log("💥 추론 에러 @ "+i+": "+e.message); stopPlay(); break; }
       i++;
       const targetMs=t0*1000 + i*HOP*1000;
       const wait=targetMs - ac.currentTime*1000;
@@ -188,10 +207,12 @@ async function play(){
       const sorted=[...latHist].sort((a,b)=>a-b); const p95=sorted[Math.floor(sorted.length*0.95)];
       log(`✅ 평균 ${mean.toFixed(1)}ms / p95 ${p95.toFixed(1)}ms → ${mean<HOP*1000?"실시간 OK":"LAG"}`);
     }
+    playing=false;
   };
   inferLoop();
 }
 $("play").onclick=()=>play();
+$("stop") && ($("stop").onclick=()=>{ stopPlay(); log("정지"); });
 
 buildScene();
 initModel().then(ok=>{ if(!ok) log("모델 실패"); });
