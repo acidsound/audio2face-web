@@ -68,9 +68,10 @@ let scene=null, renderLoop=null, faceMesh=null, targetMgr=null, targetNames=[];
 // eyeBlink (ARKit 0,1) is NOT mapped — UniTalker correlates blink with jawOpen, which reads
 // as awkward. Blink is driven by an independent idle timer (see startBlink) instead.
 const MAP = {
-  8:"じと目", 9:"じと目", 10:"びっくり", 11:"びっくり",
+  // NOTE: all eye/brow expression channels (じと目, びっくり, 困る, にこり...) are intentionally
+  // NOT mapped — UniTalker correlates them with jawOpen, leaving eyes half-closed during speech.
+  // Eyes are driven ONLY by the independent idle blink timer (startBlink / doBlink).
   12:"口角上げ", 13:"口角上げ",
-  14:"にこり", 15:"にこり", 16:"困る", 17:"困る",
   18:"あ", 19:"あ",
   26:"口横広げ", 27:"口横広げ",
   28:"ω", 29:"ω",
@@ -83,7 +84,7 @@ const MAP = {
 };
 // amp: per-target influence scale. あ boost removed (was 1.5 → clamp at 0.53, mouth stuck open).
 // Mouth-open now mapped to a visible 0.1(closed)~0.8(open) band via MOUTH_* below.
-const AMP = { "い":1.3, "う":1.3, "え":1.3, "お":1.3, "口横広げ":1.3, "口角上げ":1.3, "にこり":1.2, "まばたき":1.0 };
+const AMP = { "い":1.3, "う":1.3, "え":1.3, "お":1.3, "口横広げ":1.3, "口角上げ":1.3 };
 // mouth-open remap: raw model jawOpen [0..1] → influence band [MOUTH_MIN..MOUTH_MAX]
 const MOUTH_MIN = 0.10;
 const MOUTH_MAX = 0.80;
