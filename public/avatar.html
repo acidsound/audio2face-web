@@ -344,6 +344,18 @@ function buildScene(){
     else {
       log("🧊 GLB 로드 — morph targets: "+targetNames.length+"개");
       log("   あ OK: "+(targetNames.indexOf("あ")>=0));
+      // --- Cell-shading outline (lightweight OutlineLayer per mesh) ---
+      // Draws a thin black silhouette around each GLB mesh — toon look, no geometry dup.
+      // Ensure an OutlineLayer exists so renderOutline is honored.
+      if(!sc._outlineLayer){ new BABYLON.OutlineLayer("outline", sc); }
+      const OUTLINE_W = 0.025; // thin
+      for(const m of meshes){
+        if(!m.getTotalVertices || m.getTotalVertices()===0) continue;
+        m.renderOutline = true;
+        m.outlineColor = new BABYLON.Color3(0.04, 0.04, 0.07); // near-black ink
+        m.outlineWidth = OUTLINE_W;
+      }
+      log("   외곽선 적용 (OutlineLayer, width="+OUTLINE_W+")");
       // compute world bounding from ALL meshes
       let minY=Infinity,maxY=-Infinity,minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
       for(const m of sc.meshes){
