@@ -330,7 +330,7 @@ function buildScene(){
       });
       // WHITE FOAM-BOARD background: large plane behind subject
       // camera is at alpha=π/2 (looking from -Z), so place board at +Z behind subject
-      const board=sc.createGround("foamboard", {width: totalH*3, height: totalH*3, subdivisions:1});
+      const board=BABYLON.MeshBuilder.CreatePlane("foamboard", {width: totalH*3, height: totalH*3}, sc);
       const boardMat=new BABYLON.StandardMaterial("boardMat", sc);
       boardMat.diffuseColor=new BABYLON.Color3(0.95, 0.95, 0.93);
       boardMat.specularColor=new BABYLON.Color3(0, 0, 0);
@@ -338,16 +338,14 @@ function buildScene(){
       boardMat.backFaceCulling=false;
       board.material=boardMat;
       board.position=new BABYLON.Vector3(cx, (minY+maxY)/2, maxZ+totalH*0.4);
-      board.rotation.x=0; // vertical wall
-      // orient board normal toward -Z (toward camera)
-      board.rotation.y=Math.PI;
-      // soft fill curve below (no horizon line)
-      const curve=sc.createGround("floor", {width: totalH*3, height: totalH*1.2, subdivisions:1});
+      board.rotation.y=Math.PI; // face -Z (toward camera)
+      // soft floor below for cyclorama feel
+      const floor=BABYLON.MeshBuilder.CreateGround("floor", {width: totalH*3, height: totalH*1.2}, sc);
       const floorMat=new BABYLON.StandardMaterial("floorMat", sc);
       floorMat.diffuseColor=new BABYLON.Color3(0.85, 0.85, 0.83);
       floorMat.specularColor=new BABYLON.Color3(0,0,0);
-      curve.material=floorMat;
-      curve.position=new BABYLON.Vector3(cx, minY-0.02, cz);
+      floor.material=floorMat;
+      floor.position=new BABYLON.Vector3(cx, minY-0.02, cz);
       // idle: stop all default animations
       sc.animationGroups.forEach(g=>g.stop());
       log("   idle (애니매이션 정지) + 폼보드 배경");
