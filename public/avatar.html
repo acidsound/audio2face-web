@@ -251,7 +251,7 @@ function buildScene(){
   cam.wheelDeltaPercentage=0.01;
   cam.pinchDeltaPercentage=0.01;
   cam.panningSensibility=0; // disable panning
-  cam.fov=0.7; // wider FOV → full face visible from reasonable distance
+  cam.fov=0.55; // moderate FOV → head fills upper 50% of screen at radius 3.5
   cam.minZ=0.01; // allow very near plane
   // 3-point studio lighting + white foam-board background (set after ImportMesh)
   // 1) KEY light: PointLight, near camera, soft, warm white → main illumination
@@ -316,7 +316,7 @@ function buildScene(){
       // face width is ~25% of shoulder width for typical anime
       const faceW = Math.max(0.08, shoulderW*0.25);
       // close-up: distance = faceW * 1.5 (inside-head), but clamp prevents
-      const faceRadius = faceW * 5.5;   // far enough so head fits top 49% of screen
+      const faceRadius = faceW * 3.5;   // tighter framing — head fills upper half
       const safeMin = faceW * 0.8;       // close enough but outside skin
       cam.setTarget(new BABYLON.Vector3(cx, headY, cz));
       cam.radius = faceRadius;
