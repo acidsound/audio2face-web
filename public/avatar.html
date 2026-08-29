@@ -106,6 +106,10 @@ function applyBlendshape(bs){
     targetMgr.getTarget(i).influence = cur + (tgt-cur)*LERP;
   }
 }
+function resetMouth(){
+  if(!targetMgr) return;
+  for(let i=0;i<targetMgr.numTargets;i++){ targetMgr.getTarget(i).influence = 0; }
+}
 const latHist=[];
 function record(dt){
   latHist.push(dt); if(latHist.length>600) latHist.shift();
@@ -166,6 +170,7 @@ function stopPlay(){
   try{ if(curSrc){ curSrc.onended=null; curSrc.stop(); } }catch(e){}
   curSrc=null;
   if(renderLoop){ renderLoop.stop(); renderLoop=null; }
+  resetMouth();
   log("⏹ 정지");
 }
 async function play(){
@@ -202,7 +207,7 @@ async function play(){
     };
     const prodP=produce();
     const t0=ac.currentTime+LOOKAHEAD; src.start(t0);
-    src.onended=()=>{ if(!stopFlag){ stopFlag=true; playing=false; log("🔚 재생 종료"); } };
+    src.onended=()=>{ if(!stopFlag){ stopFlag=true; playing=false; resetMouth(); log("🔚 재생 종료"); } };
     const tick=()=>{
       if(stopFlag) return;
       const t=ac.currentTime-t0;
