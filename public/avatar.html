@@ -349,8 +349,15 @@ function buildScene(){
       const OUTLINE_COLOR = new BABYLON.Color3(0.04, 0.04, 0.07);
       const _dbgDepth = new URLSearchParams(location.search).get("dbg")==="depth";
       const ppr = sc.enablePrePassRenderer();
-      const _dt = ppr ? ppr.getTexture(BABYLON.Constants.PREPASS_DEPTH_TEXTURE_TYPE) : null;
-      log("   PrePassRenderer: "+(ppr?"OK":"FAIL")+", depthTex="+( _dt?"yes":"NO"));
+      let _depthTex = null;
+      if(ppr){
+        const rt = ppr.getRenderTarget ? ppr.getRenderTarget() : null;
+        if(rt && rt.textures){
+          const DID = BABYLON.Constants.PREPASS_DEPTH_TEXTURE_TYPE;
+          _depthTex = rt.textures.find(t => t && t._prePassTextureType === DID) || null;
+        }
+      }
+      log("   PrePassRenderer: "+(ppr?"OK":"FAIL")+", depthTex="+( _depthTex?"yes":"NO"));
       if(ppr){
         BABYLON.Effect.ShadersStore["outlinePPFragmentShader"] = `
           precision highp float;
@@ -403,7 +410,12 @@ function buildScene(){
           1.0, cam, BABYLON.Texture.NEAREST_SAMPLINGMODE, eng,
           false, _dbgDepth ? "#define DBG_DEPTH" : "");
         pp.onApply = (effect)=>{
-          const dtex = ppr.getTexture(BABYLON.Constants.PREPASS_DEPTH_TEXTURE_TYPE);
+          const rt = ppr.getRenderTarget ? ppr.getRenderTarget() : null;
+          let dtex = _depthTex;
+          if(rt && rt.textures){
+            const DID = BABYLON.Constants.PREPASS_DEPTH_TEXTURE_TYPE;
+            dtex = rt.textures.find(t => t && t._prePassTextureType === DID) || _depthTex;
+          }
           if(!dtex) return;
           effect.setTexture("depthSampler", dtex);
           effect.setFloat2("screenSize", eng.getRenderWidth(), eng.getRenderHeight());
