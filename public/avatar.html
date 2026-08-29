@@ -262,7 +262,7 @@ function buildScene(){
     _shiftDown=true;
     _ptr.angularSensibilityX=0;
     _ptr.angularSensibilityY=0;
-    cam.panningSensibility=600;  // smaller value → slower pan, no NaN
+    cam.panningSensibility=200;  // gentle pan, no NaN
   } });
   window.addEventListener("keyup",(e)=>{ if(e.key==="Shift"){
     _shiftDown=false;
@@ -360,24 +360,41 @@ function buildScene(){
       fillLight.position=new BABYLON.Vector3(cx+1.5, headY+0.2, cz+1.0);  // opposite
       rimLight.position=new BABYLON.Vector3(cx, headY+0.5, cz-1.6);  // from behind
       // camera direction: from -Z to +Z, alpha=-π/2 looks at +Z. Keep default.
-      // HARD clamp every frame: radius + target (prevent NaN/exit)
+      // HARD clamp every frame: radius + target + position (prevent NaN/exit)
       const _minR = safeMin;
       const _txL = minX - (maxX-minX)*0.5, _txR = maxX + (maxX-minX)*0.5;
       const _tyL = minY - (maxY-minY)*0.3, _tyR = maxY + (maxY-minY)*0.3;
       const _tzL = minZ - (maxZ-minZ)*0.5, _tzR = maxZ + (maxZ-minZ)*0.5;
       const _cx0=cx, _cz0=cz, _hY0=headY;
+      // track last good target to recover from NaN
+      let _lastGoodX=_cx0, _lastGoodY=_hY0, _lastGoodZ=_cz0;
       sc.onBeforeRenderObservable.add(()=>{
-        if(!isFinite(cam.radius)||isNaN(cam.radius)) cam.radius=_minR;
+        // radius
+        if(!isFinite(cam.radius)) cam.radius=_minR;
         if(cam.radius < _minR) cam.radius = _minR;
         if(cam.radius > 20) cam.radius = 20;
+        // target NaN/Inf guard
         const t=cam.target;
-        if(!isFinite(t.x)||isNaN(t.x)) cam.setTarget(new BABYLON.Vector3(_cx0,_hY0,_cz0));
+        if(isFinite(t.x)&&isFinite(t.y)&&isFinite(t.z)){
+          _lastGoodX=t.x; _lastGoodY=t.y; _lastGoodZ=t.z;
+        } else {
+          // restore from last good
+          t.x=_lastGoodX; t.y=_lastGoodY; t.z=_lastGoodZ;
+        }
+        // clamp target to safe region
         if(t.x<_txL) t.x=_txL; if(t.x>_txR) t.x=_txR;
         if(t.y<_tyL) t.y=_tyL; if(t.y>_tyR) t.y=_tyR;
         if(t.z<_tzL) t.z=_tzL; if(t.z>_tzR) t.z=_tzR;
-        // NaN check on alpha/beta (rotation can also NaN out)
+        // camera position (ArcRotateCamera computes from target+alpha+beta+radius, but check anyway)
+        const p=cam.position;
+        if(!isFinite(p.x)||!isFinite(p.y)||!isFinite(p.z)){
+          cam.alpha=Math.PI/2; cam.beta=Math.PI/2.5; cam.radius=_minR;
+          t.x=_cx0; t.y=_hY0; t.z=_cz0;
+        }
+        // alpha/beta NaN
         if(!isFinite(cam.alpha)) cam.alpha=Math.PI/2;
         if(!isFinite(cam.beta)) cam.beta=Math.PI/2.5;
+        if(cam.beta<0.01) cam.beta=0.01; if(cam.beta>Math.PI-0.01) cam.beta=Math.PI-0.01;
       });
       // WHITE FOAM-BOARD background: large plane behind subject
       // camera is at alpha=π/2 (looking from -Z), so place board at +Z behind subject
