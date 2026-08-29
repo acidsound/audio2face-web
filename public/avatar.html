@@ -277,6 +277,17 @@ function buildScene(){
       cam.lowerRadiusLimit = safeMin;
       cam.upperRadiusLimit = Math.max(8, h * 1.5);
       log("   카메라: headW="+headW.toFixed(2)+" radius="+cam.radius.toFixed(2)+" min="+safeMin.toFixed(2));
+      // HARD CLAMP: every frame, force radius >= safeMin (pinch/wheel cannot pass through mesh)
+      const _minR = safeMin;
+      sc.onBeforeRenderObservable.add(()=>{
+        if(cam.radius < _minR){
+          cam.radius = _minR;
+        }
+      });
+      // disable inertial zoom & other behaviors that could push past min
+      cam.wheelDeltaPercentage = 0.01;
+      cam.pinchDeltaPercentage = 0.01;
+      cam.panningSensibility = 0; // disable panning
       // idle: stop all default animations (no greeting/spin)
       sc.animationGroups.forEach(g=>g.stop());
       log("   idle 모드 (기본 애니매이션 정지)");
