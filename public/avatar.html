@@ -13,9 +13,8 @@
   .pill { font-size:11px; padding:3px 8px; border-radius:999px; background:#1c2230; }
   .pill.ok { background:#15402a; color:#7ff0a8; }
   .pill.warn { background:#3a2a10; color:#ffcf6e; }
-  .pill.run { background:#10243a; color:#7fc4ff; }
   main { padding:0 16px 24px; }
-  #render { width:100%; height:50vh; min-height:280px; display:block; background:#11151f; border-radius:16px; }
+  #render { width:100%; height:55vh; min-height:320px; display:block; background:#11151f; border-radius:16px; touch-action:none; }
   .hud { max-width:460px; margin:14px auto 0; display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
   .card { background:#151a26; border-radius:12px; padding:10px 12px; }
   .card .k { font-size:10px; opacity:.6; }
@@ -27,7 +26,7 @@
 </head>
 <body>
 <header>
-  <h1>Audio2Face · avatar rig</h1>
+  <h1>Audio2Face · avatar rig (GLB)</h1>
   <span id="ep" class="pill">EP: …</span>
   <span id="load" class="pill warn">대기</span>
 </header>
@@ -43,7 +42,7 @@
     <div class="card"><div class="k">평균</div><div class="v"><span id="avg">–</span><small> ms</small></div></div>
     <div class="card"><div class="k">p95</div><div class="v"><span id="p95">–</span><small> ms</small></div></div>
   </div>
-  <button id="play">▶ TTS + 아바타 립싱크</button>
+  <button id="play">▶ TTS + GLB 립싱크</button>
   <div id="log"></div>
 </main>
 
@@ -54,13 +53,24 @@ import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/o
 const SR=16000, WIN=0.05, HOP=0.05, TS_OUT=50, FRAME=51, LOOKAHEAD=2.0;
 const DB_NAME="a2f-models", DB_VER=1, STORE="blobs";
 const MODEL_URL="./models/unitalker_v0.4.0_base.int8.onnx";
+const GLB_URL="./models/Ani-default_481.glb";
 const FILES=["test_voice.wav","tts_hello.wav","tts_korean.wav"];
 const $ = id=>document.getElementById(id);
 const log = m=>{ const el=$("log"); el.textContent+=m+"\n"; el.scrollTop=el.scrollHeight; };
 ort.env.wasm.wasmPaths="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/";
 ort.env.wasm.numThreads=Math.min(4, navigator.hardwareConcurrency||4);
 
-let session=null, audioCtx=null, curSrc=null, stopFlag=false, playing=false, modelBufCache=null, scene=null, mouthInner=null, renderLoop=null;
+let session=null, audioCtx=null, curSrc=null, stopFlag=false, playing=false, modelBufCache=null;
+let scene=null, renderLoop=null, faceMesh=null, targetMgr=null, targetNames=[], lastBS=null;
+
+// UniTalker 51 (ARKit order) → VRM 64 target (approx). Key channel = jawOpen→あ.
+const MAP = {
+  0:"まばたき", 1:"まばたき", 32:"あ", 22:"にこり", 23:"にこり", 24:"にっこり",
+  25:"口角上げ", 26:"口角上げ", 27:"ω", 28:"ω", 29:"お", 30:"お", 31:"あ",
+  33:"い", 34:"う", 35:"え", 36:"お", 37:"い", 38:"う", 39:"え",
+  40:"あ", 41:"い", 42:"う", 43:"え", 44:"お", 45:"あ", 46:"い", 47:"う", 48:"え", 49:"お",
+  4:"びっくり", 5:"びっくり", 7:"なごみ", 8:"なごみ", 9:"真面目"
+};
 
 function getAudioCtx(){
   if(!audioCtx){ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }
@@ -68,9 +78,16 @@ function getAudioCtx(){
   return audioCtx;
 }
 function applyBlendshape(bs){
-  if(!mouthInner) return;
-  const v=Math.max(0,Math.min(1,(bs[32]||0)*8));
-  mouthInner.scaling.y=0.05 + v*1.0;
+  if(!targetMgr) return;
+  // reset all to 0
+  for(let i=0;i<targetMgr.numTargets;i++) targetMgr.getTarget(i).influence=0;
+  // apply mapped
+  for(const k in MAP){
+    const v=Math.max(0,Math.min(1,(bs[+k]||0)*8));
+    const ti=targetNames.indexOf(MAP[k]);
+    if(ti>=0) targetMgr.getTarget(ti).influence=Math.max(targetMgr.getTarget(ti).influence, v);
+  }
+  lastBS=bs;
 }
 const latHist=[];
 function record(dt){
@@ -137,6 +154,7 @@ function stopPlay(){
 async function play(){
   if(playing){ stopPlay(); await new Promise(r=>setTimeout(r,100)); }
   if(!session){ const ok=await initModel(); if(!ok){ log("모델 실패"); return; } }
+  if(!faceMesh){ log("GLB 미로드 — 새로고침 필요"); return; }
   stopFlag=false; playing=true;
   $("hop").textContent=Math.round(HOP*1000);
   try{
@@ -172,7 +190,7 @@ async function play(){
       const t=ac.currentTime-t0;
       const ci=Math.floor(t/HOP);
       if(ci>=0 && ci<total){
-        if(frames[ci]) lastBS=frames[ci];  // hold last valid frame if producer hasn't caught up
+        if(frames[ci]) lastBS=frames[ci];
         if(lastBS) applyBlendshape(lastBS);
       }
       $("prog") && ($("prog").textContent=Math.min(100,Math.max(0,Math.floor(t/duration*100)))+"%");
@@ -191,30 +209,30 @@ async function play(){
 }
 $("play").onclick=()=>play();
 
-let _bjsReady=false;
+let _ready=false;
 function buildScene(){
-  if(_bjsReady||!window.BABYLON) return; _bjsReady=true;
+  if(_ready||!window.BABYLON) return; _ready=true;
   const canvas=$("render");
   const eng=new BABYLON.Engine(canvas,true,{preserveDrawingBuffer:true,stencil:true});
   const sc=new BABYLON.Scene(eng); sc.clearColor=new BABYLON.Color4(0.07,0.08,0.1,1);
-  const cam=new BABYLON.ArcRotateCamera("cam",Math.PI/2,Math.PI/2,4.2,BABYLON.Vector3.Zero(),sc);
-  cam.attachControl(canvas,true);
+  const cam=new BABYLON.ArcRotateCamera("cam",Math.PI/2,Math.PI/2,3.2,BABYLON.Vector3.Zero(),sc);
+  cam.attachControl(canvas,true); cam.lowerRadiusLimit=1.5; cam.upperRadiusLimit=6;
   new BABYLON.HemisphericLight("l",new BABYLON.Vector3(0,1,0),sc);
-  const head=BABYLON.MeshBuilder.CreateSphere("head",{diameter:2,segments:32},sc); head.material=new BABYLON.StandardMaterial("m",sc); head.material.diffuseColor=new BABYLON.Color3(0.2,0.3,0.5);
-  BABYLON.MeshBuilder.CreateSphere("eyeL",{diameter:0.28},sc).position.set(-0.45,0.35,0.95);
-  BABYLON.MeshBuilder.CreateSphere("eyeR",{diameter:0.28},sc).position.set(0.45,0.35,0.95);
-  const lip=BABYLON.MeshBuilder.CreateTorus("lip",{diameter:0.55,thickness:0.06},sc); lip.position.z=1.0;
-  // mouth as child of head, facing +Z (camera), double-sided so it's visible
-  mouthInner=BABYLON.MeshBuilder.CreatePlane("mouthIn",{size:0.4},sc);
-  mouthInner.parent=head; mouthInner.position=new BABYLON.Vector3(0,0,1.0);
-  mouthInner.scaling.y=0.05;
-  const mm=new BABYLON.StandardMaterial("mm",sc);
-  mm.diffuseColor=new BABYLON.Color3(0.9,0.3,0.4); mm.backFaceCulling=false;
-  mouthInner.material=mm;
   scene=sc; renderLoop=eng;
-  eng.runRenderLoop(()=>sc.render());
+  BABYLON.SceneLoader.ImportMesh("","./",GLB_URL,sc,(meshes)=>{
+    // find mesh with morph targets
+    for(const m of meshes){
+      if(m.morphTargetManager && m.morphTargetManager.numTargets>0){
+        faceMesh=m; targetMgr=m.morphTargetManager;
+        targetNames=targetMgr.getTargets().map(t=>t.name);
+        break;
+      }
+    }
+    if(!faceMesh) log("⚠️ morph target 없음 — GLB 확인");
+    else log("🧊 GLB 로드 — morph targets: "+targetNames.length+"개 (터치로 회전)");
+    eng.runRenderLoop(()=>sc.render());
+  }, null, (sc2,msg)=>{ log("✗ GLB: "+msg); });
   window.addEventListener("resize",()=>eng.resize());
-  log("🧊 Babylon 씬 준비 — 메시: "+sc.meshes.length+"개 (터치로 회전)");
 }
 buildScene();
 initModel().then(ok=>{ if(!ok) $("load").textContent="model: FAIL"; });
